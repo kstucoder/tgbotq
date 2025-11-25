@@ -1,0 +1,1111 @@
+import os
+import re
+import logging
+import asyncio
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from dotenv import load_dotenv
+import aiosqlite
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.filters import Command
+from aiogram import F
+
+# ---------------- CONFIG ----------------
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
+PAYMENT_CARD = os.getenv("PAYMENT_CARD", "9860 **** **** 1234")
+DB_PATH = os.getenv("DB_PATH", "files_bot.db")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+log = logging.getLogger(__name__)
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+# ----------------------------------------
+
+# ---------- DB init ----------
+CREATE_TABLES_SQL = """
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    category TEXT,
+    tags TEXT,
+    price INTEGER DEFAULT 0,
+    description TEXT,
+    file_id TEXT,
+    file_unique_id TEXT,
+    channel_message_id INTEGER,
+    backup_channel_message_id INTEGER,
+    caption TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
+    title, caption, tags, content='files', content_rowid='id'
+);
+
+-- Trigger: yangi fayl qo'shilganda FTS ga ham qo'shish
+CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
+  INSERT INTO files_fts(rowid, title, caption, tags) 
+  VALUES (new.id, new.title, new.caption, new.tags);
+END;
+
+-- Trigger: fayl o'chirilganda FTS dan ham o'chirish
+CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
+  DELETE FROM files_fts WHERE rowid = old.id;
+END;
+
+-- Trigger: fayl yangilanganda FTS ni ham yangilash
+CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
+  UPDATE files_fts SET title = new.title, caption = new.caption, tags = new.tags 
+  WHERE rowid = new.id;
+END;
+
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    username TEXT,
+    file_row_id INTEGER NOT NULL,
+    status TEXT DEFAULT 'waiting_for_screenshot',
+    screenshot_file_id TEXT,
+    screenshot_file_unique_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (file_row_id) REFERENCES files (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_files_channel_msg ON files(channel_message_id);
+"""
+
+CAPTION_KEY_PATTERN = re.compile(
+    r'^\s*(TITLE|CATEGORY|TAGS|PRICE|DESCRIPTION)\s*:\s*(.+)$',
+    re.IGNORECASE | re.MULTILINE
+)
+
+async def init_db():
+    """Ma'lumotlar bazasini yaratish va sozlash"""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.executescript(CREATE_TABLES_SQL)
+            await db.commit()
+            log.info("Database initialized successfully")
+    except Exception as e:
+        log.error(f"Database initialization error: {e}")
+        raise
+
+# ---------- Caption parser ----------
+def parse_caption(caption: str) -> Dict:
+    """Caption dan metadata ajratib olish"""
+    meta = {
+        "title": "",
+        "category": "",
+        "tags": "",
+        "price": 0,
+        "description": "",
+        "caption": caption or ""
+    }
+    
+    if not caption:
+        return meta
+    
+    matches = CAPTION_KEY_PATTERN.findall(caption)
+    for key, val in matches:
+        k = key.strip().upper()
+        v = val.strip()
+        
+        if k == 'TITLE':
+            meta['title'] = v
+        elif k == 'CATEGORY':
+            meta['category'] = v
+        elif k == 'TAGS':
+            meta['tags'] = v
+        elif k == 'PRICE':
+            try:
+                meta['price'] = int(re.sub(r'\D', '', v))
+            except:
+                meta['price'] = 0
+        elif k == 'DESCRIPTION':
+            meta['description'] = v
+    
+    return meta
+
+# ---------- DB operations ----------
+async def insert_file_record(db, meta: Dict) -> int:
+    """Yangi fayl yozuvini bazaga qo'shish"""
+    try:
+        query = """
+        INSERT INTO files (title, category, tags, price, description, file_id, 
+                          file_unique_id, channel_message_id, backup_channel_message_id, caption)
+        VALUES (:title, :category, :tags, :price, :description, :file_id, 
+                :file_unique_id, :channel_message_id, :backup_channel_message_id, :caption)
+        """
+        cur = await db.execute(query, meta)
+        await db.commit()
+        return cur.lastrowid
+    except Exception as e:
+        log.error(f"Error inserting file record: {e}")
+        raise
+
+async def search_files(db, query_text: str, limit: int = 10) -> List:
+    """Fayllarni qidirish"""
+    try:
+        # FTS5 qidiruv uchun so'zni tayyorlash
+        q = query_text.strip().replace("'", "''")
+        
+        sql = """
+        SELECT f.id, f.title, f.category, f.tags, f.price, f.description, 
+               f.file_id, f.channel_message_id
+        FROM files_fts fts
+        JOIN files f ON f.id = fts.rowid
+        WHERE files_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """
+        
+        cur = await db.execute(sql, (q, limit))
+        rows = await cur.fetchall()
+        return rows
+    except Exception as e:
+        log.error(f"Search error: {e}")
+        # Agar FTS ishlamasa, oddiy LIKE bilan qidirish
+        try:
+            sql = """
+            SELECT id, title, category, tags, price, description, file_id, channel_message_id
+            FROM files
+            WHERE title LIKE ? OR tags LIKE ? OR description LIKE ?
+            LIMIT ?
+            """
+            pattern = f"%{query_text}%"
+            cur = await db.execute(sql, (pattern, pattern, pattern, limit))
+            return await cur.fetchall()
+        except Exception as e2:
+            log.error(f"Fallback search error: {e2}")
+            return []
+
+async def get_file_by_id(db, file_row_id: int) -> Optional[tuple]:
+    """ID bo'yicha faylni olish"""
+    try:
+        cur = await db.execute("SELECT * FROM files WHERE id = ?", (file_row_id,))
+        return await cur.fetchone()
+    except Exception as e:
+        log.error(f"Error getting file by ID {file_row_id}: {e}")
+        return None
+
+async def create_order(db, user_id: int, username: str, file_row_id: int) -> int:
+    """Yangi buyurtma yaratish"""
+    try:
+        cur = await db.execute("""
+            INSERT INTO orders (user_id, username, file_row_id, status)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, username, file_row_id, 'waiting_for_screenshot'))
+        await db.commit()
+        return cur.lastrowid
+    except Exception as e:
+        log.error(f"Error creating order: {e}")
+        raise
+
+async def attach_screenshot_to_order(db, order_id: int, file_id: str, file_unique_id: str):
+    """Buyurtmaga screenshot biriktirish"""
+    try:
+        await db.execute("""
+            UPDATE orders 
+            SET screenshot_file_id = ?, screenshot_file_unique_id = ?, 
+                status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (file_id, file_unique_id, 'pending_admin', order_id))
+        await db.commit()
+    except Exception as e:
+        log.error(f"Error attaching screenshot: {e}")
+        raise
+
+async def get_order(db, order_id: int) -> Optional[tuple]:
+    """ID bo'yicha buyurtmani olish"""
+    try:
+        cur = await db.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
+        return await cur.fetchone()
+    except Exception as e:
+        log.error(f"Error getting order {order_id}: {e}")
+        return None
+
+async def set_order_status(db, order_id: int, status: str):
+    """Buyurtma statusini o'zgartirish"""
+    try:
+        await db.execute(
+            "UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (status, order_id)
+        )
+        await db.commit()
+    except Exception as e:
+        log.error(f"Error setting order status: {e}")
+        raise
+
+async def get_pending_order_for_user(db, user_id: int) -> Optional[tuple]:
+    """Foydalanuvchining aktiv buyurtmasini topish"""
+    try:
+        cur = await db.execute("""
+            SELECT id FROM orders
+            WHERE user_id = ? AND status = 'waiting_for_screenshot'
+            ORDER BY created_at DESC LIMIT 1
+        """, (user_id,))
+        return await cur.fetchone()
+    except Exception as e:
+        log.error(f"Error getting pending order: {e}")
+        return None
+
+# ---------- Keyboards ----------
+
+def main_menu_kb() -> ReplyKeyboardMarkup:
+    """Asosiy menyu klaviaturasi (pastdagi tugmalar)"""
+    buttons = [
+        [
+            KeyboardButton(text="🔍 Qidirish"),
+            KeyboardButton(text="📋 Mening buyurtmalarim")
+        ],
+        [
+            KeyboardButton(text="❓ Yordam"),
+            KeyboardButton(text="📞 Admin bilan bog'lanish")
+        ]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,  # Tugmalarni kichikroq qilish
+        input_field_placeholder="Qidiruv uchun fayl nomini yozing..."  # Placeholder
+    )
+
+def cancel_kb() -> ReplyKeyboardMarkup:
+    """Bekor qilish klaviaturasi"""
+    buttons = [
+        [KeyboardButton(text="❌ Bekor qilish")]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True  # Bir marta ishlatilgandan keyin yashirinadi
+    )
+
+def files_list_kb(rows: List, prefix: str = "BUY") -> InlineKeyboardMarkup:
+    """Fayllar ro'yxati klaviaturasi - to'liq to'g'ri"""
+    buttons = []
+    for r in rows:
+        rowid = r[0]
+        title = r[1] or "Nomsiz fayl"
+        price = r[4] or 0
+        # Har bir tugma alohida qatorda
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📄 {title} — {price:,} so'm",
+                callback_data=f"{prefix}:{rowid}"
+            )
+        ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def admin_order_kb(order_id: int) -> InlineKeyboardMarkup:
+    """Admin uchun buyurtmani tasdiqlash klaviaturasi - to'liq to'g'ri"""
+    # MUHIM: Aiogram 3.x da text= va callback_data= berilishi SHART!
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="✅ Tasdiqlash", 
+                callback_data=f"ADMIN_APPROVE:{order_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Rad etish", 
+                callback_data=f"ADMIN_REJECT:{order_id}"
+            )
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# ---------- Handlers ----------
+@dp.message(Command(commands=["start"]))
+async def cmd_start(message: types.Message):
+    """Start buyrug'ini qayta ishlash"""
+    welcome_text = (
+        "👋 <b>Assalomu alaykum!</b>\n\n"
+        "📚 Men fayllarni qidirish va sotib olish botiman.\n\n"
+        "🔍 <b>Qanday foydalanish:</b>\n"
+        "• <b>🔍 Qidirish</b> tugmasini bosing yoki fayl nomini yozing\n"
+        "• Ro'yxatdan kerakli faylni tanlang\n"
+        "• To'lovni amalga oshiring va screenshot yuboring\n\n"
+        "💡 Masalan: <code>python dasturlash</code> yoki <code>matematika</code>\n\n"
+        "📞 Savol bo'lsa <b>📞 Admin bilan bog'lanish</b> tugmasini bosing."
+    )
+    await message.answer(welcome_text, parse_mode="HTML", reply_markup=main_menu_kb())
+
+@dp.message(Command(commands=["help"]))
+async def cmd_help(message: types.Message):
+    """Yordam buyrug'i"""
+    help_text = (
+        "📖 <b>Yordam</b>\n\n"
+        "🔍 <b>Qidirish:</b>\n"
+        "Kerakli faylingiz nomini yozing yoki 🔍 Qidirish tugmasini bosing.\n\n"
+        "💰 <b>Sotib olish:</b>\n"
+        "1️⃣ Faylni tanlang\n"
+        "2️⃣ Karta raqamiga to'lov qiling\n"
+        "3️⃣ Screenshot yuboring\n"
+        "4️⃣ Admin tasdiqlagandan keyin fayl sizga yuboriladi\n\n"
+        "📝 <b>Tugmalar:</b>\n"
+        "🔍 Qidirish - Fayllarni qidirish\n"
+        "📋 Mening buyurtmalarim - Buyurtmalar tarixi\n"
+        "❓ Yordam - Bu yordam\n"
+        "📞 Admin - Admin bilan bog'lanish"
+    )
+    await message.answer(help_text, parse_mode="HTML", reply_markup=main_menu_kb())
+
+@dp.message(Command(commands=["help"]))
+async def cmd_help(message: types.Message):
+    """Yordam buyrug'i"""
+    help_text = (
+        "📖 <b>Yordam</b>\n\n"
+        "🔍 <b>Qidirish:</b>\n"
+        "Kerakli faylingiz nomini yozing yoki 🔍 Qidirish tugmasini bosing.\n\n"
+        "💰 <b>Sotib olish:</b>\n"
+        "1️⃣ Faylni tanlang\n"
+        "2️⃣ Karta raqamiga to'lov qiling\n"
+        "3️⃣ Screenshot yuboring\n"
+        "4️⃣ Admin tasdiqlagandan keyin fayl sizga yuboriladi\n\n"
+        "📝 <b>Tugmalar:</b>\n"
+        "🔍 Qidirish - Fayllarni qidirish\n"
+        "📋 Mening buyurtmalarim - Buyurtmalar tarixi\n"
+        "❓ Yordam - Bu yordam\n"
+        "📞 Admin - Admin bilan bog'lanish"
+    )
+    await message.answer(help_text, parse_mode="HTML", reply_markup=main_menu_kb())
+
+@dp.message(Command(commands=["adm"]))
+async def cmd_admin_stats(message: types.Message):
+    """Admin statistikasi - faqat admin uchun"""
+    # Faqat admin kirishini tekshirish
+    if message.from_user.id != ADMIN_CHAT_ID and message.chat.id != ADMIN_CHAT_ID:
+        await message.answer("❌ Bu buyruq faqat admin uchun!")
+        return
+    
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Umumiy fayllar soni
+            cur = await db.execute("SELECT COUNT(*) FROM files")
+            total_files = (await cur.fetchone())[0]
+            
+            # Kategoriya bo'yicha fayllar
+            cur = await db.execute("""
+                SELECT category, COUNT(*) as cnt 
+                FROM files 
+                WHERE category != '' 
+                GROUP BY category 
+                ORDER BY cnt DESC 
+                LIMIT 5
+            """)
+            top_categories = await cur.fetchall()
+            
+            # Umumiy buyurtmalar soni
+            cur = await db.execute("SELECT COUNT(*) FROM orders")
+            total_orders = (await cur.fetchone())[0]
+            
+            # Status bo'yicha buyurtmalar
+            cur = await db.execute("""
+                SELECT status, COUNT(*) as cnt 
+                FROM orders 
+                GROUP BY status
+            """)
+            orders_by_status = await cur.fetchall()
+            
+            # Tasdiqlangan buyurtmalar va umumiy foyda
+            cur = await db.execute("""
+                SELECT COUNT(*), SUM(f.price)
+                FROM orders o
+                JOIN files f ON o.file_row_id = f.id
+                WHERE o.status = 'approved'
+            """)
+            approved_stats = await cur.fetchone()
+            approved_count = approved_stats[0] or 0
+            total_revenue = approved_stats[1] or 0
+            
+            # Bugungi buyurtmalar
+            cur = await db.execute("""
+                SELECT COUNT(*)
+                FROM orders
+                WHERE DATE(created_at) = DATE('now')
+            """)
+            today_orders = (await cur.fetchone())[0]
+            
+            # Bugungi tasdiqlangan va foyda
+            cur = await db.execute("""
+                SELECT COUNT(*), SUM(f.price)
+                FROM orders o
+                JOIN files f ON o.file_row_id = f.id
+                WHERE o.status = 'approved' 
+                AND DATE(o.created_at) = DATE('now')
+            """)
+            today_stats = await cur.fetchone()
+            today_approved = today_stats[0] or 0
+            today_revenue = today_stats[1] or 0
+            
+            # Eng ko'p sotilgan fayllar
+            cur = await db.execute("""
+                SELECT f.title, f.price, COUNT(*) as sales
+                FROM orders o
+                JOIN files f ON o.file_row_id = f.id
+                WHERE o.status = 'approved'
+                GROUP BY f.id
+                ORDER BY sales DESC
+                LIMIT 5
+            """)
+            top_files = await cur.fetchall()
+            
+            # Unique mijozlar soni
+            cur = await db.execute("""
+                SELECT COUNT(DISTINCT user_id)
+                FROM orders
+                WHERE status = 'approved'
+            """)
+            unique_customers = (await cur.fetchone())[0]
+            
+    except Exception as e:
+        log.error(f"Admin stats error: {e}")
+        await message.answer("❌ Statistikani olishda xatolik yuz berdi!")
+        return
+    
+    # Statistikani formatlash
+    stats_text = "📊 <b>ADMIN STATISTIKASI</b>\n"
+    stats_text += "=" * 30 + "\n\n"
+    
+    # Fayllar
+    stats_text += "📁 <b>FAYLLAR</b>\n"
+    stats_text += f"├ Jami: <b>{total_files}</b> ta\n"
+    if top_categories:
+        stats_text += "├ Top kategoriyalar:\n"
+        for cat, cnt in top_categories:
+            stats_text += f"│  • {cat}: {cnt} ta\n"
+    stats_text += "\n"
+    
+    # Buyurtmalar
+    stats_text += "🛒 <b>BUYURTMALAR</b>\n"
+    stats_text += f"├ Jami: <b>{total_orders}</b> ta\n"
+    stats_text += f"├ Bugun: <b>{today_orders}</b> ta\n"
+    stats_text += "├ Status bo'yicha:\n"
+    
+    status_names = {
+        'waiting_for_screenshot': '⏳ Screenshot kutilmoqda',
+        'pending_admin': '🕐 Admin tekshiryapti',
+        'approved': '✅ Tasdiqlangan',
+        'rejected': '❌ Rad etilgan',
+        'cancelled': '🚫 Bekor qilingan'
+    }
+    
+    for status, cnt in orders_by_status:
+        status_name = status_names.get(status, status)
+        stats_text += f"│  • {status_name}: {cnt} ta\n"
+    stats_text += "\n"
+    
+    # Moliyaviy
+    stats_text += "💰 <b>MOLIYAVIY</b>\n"
+    stats_text += f"├ Jami foyda: <b>{total_revenue:,}</b> so'm\n"
+    stats_text += f"├ Bugungi foyda: <b>{today_revenue:,}</b> so'm\n"
+    stats_text += f"├ Tasdiqlangan: <b>{approved_count}</b> ta\n"
+    stats_text += f"├ Bugun tasdiqlangan: <b>{today_approved}</b> ta\n"
+    stats_text += f"├ O'rtacha check: <b>{int(total_revenue / approved_count) if approved_count > 0 else 0:,}</b> so'm\n"
+    stats_text += "\n"
+    
+    # Mijozlar
+    stats_text += "👥 <b>MIJOZLAR</b>\n"
+    stats_text += f"├ Unique mijozlar: <b>{unique_customers}</b> ta\n"
+    if approved_count > 0:
+        stats_text += f"├ O'rtacha buyurtma/mijoz: <b>{approved_count / unique_customers:.1f}</b> ta\n"
+    stats_text += "\n"
+    
+    # Top fayllar
+    if top_files:
+        stats_text += "🏆 <b>TOP 5 FAYLLAR</b>\n"
+        for idx, (title, price, sales) in enumerate(top_files, 1):
+            stats_text += f"{idx}. {title[:30]}...\n"
+            stats_text += f"   💵 {price:,} so'm × {sales} = {price * sales:,} so'm\n"
+        stats_text += "\n"
+    
+    stats_text += "=" * 30 + "\n"
+    stats_text += f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    await message.answer(stats_text, parse_mode="HTML")
+
+
+@dp.message(Command(commands=["myorders"]))
+async def cmd_my_orders(message: types.Message):
+    """Foydalanuvchi buyurtmalari"""
+    user_id = message.from_user.id
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            cur = await db.execute("""
+                SELECT o.id, o.status, o.created_at, f.title, f.price
+                FROM orders o
+                JOIN files f ON o.file_row_id = f.id
+                WHERE o.user_id = ?
+                ORDER BY o.created_at DESC
+                LIMIT 10
+            """, (user_id,))
+            orders = await cur.fetchall()
+        except Exception as e:
+            log.error(f"Error fetching user orders: {e}")
+            await message.answer("❌ Xatolik yuz berdi. Keyinroq urinib ko'ring.", reply_markup=main_menu_kb())
+            return
+    
+    if not orders:
+        await message.answer("📭 Sizda hali buyurtmalar yo'q.\n\n🔍 Qidirish tugmasini bosib, fayllarni ko'ring!", reply_markup=main_menu_kb())
+        return
+    
+    status_emoji = {
+        'waiting_for_screenshot': '⏳',
+        'pending_admin': '🕐',
+        'approved': '✅',
+        'rejected': '❌'
+    }
+    
+    status_text = {
+        'waiting_for_screenshot': 'Screenshot kutilmoqda',
+        'pending_admin': 'Admin tekshiryapti',
+        'approved': 'Tasdiqlangan',
+        'rejected': 'Rad etilgan'
+    }
+    
+    text = "📋 <b>Sizning buyurtmalaringiz:</b>\n\n"
+    for order in orders:
+        order_id, status, created, title, price = order
+        emoji = status_emoji.get(status, '❓')
+        status_name = status_text.get(status, status)
+        text += (
+            f"{emoji} <b>Buyurtma #{order_id}</b>\n"
+            f"📄 {title}\n"
+            f"💵 {price:,} so'm\n"
+            f"📊 Status: {status_name}\n"
+            f"📅 {created[:16]}\n\n"
+        )
+    
+    await message.answer(text, parse_mode="HTML", reply_markup=main_menu_kb())
+
+# ---------- Reply Keyboard Handlers ----------
+
+@dp.message(F.text == "🔍 Qidirish")
+async def btn_search(message: types.Message):
+    """Qidirish tugmasi"""
+    await message.answer(
+        "🔍 <b>Qidirish</b>\n\n"
+        "Qidirayotgan faylingiz nomini yozing.\n\n"
+        "💡 Masalan:\n"
+        "• <code>python dasturlash</code>\n"
+        "• <code>matematika 9-sinf</code>\n"
+        "• <code>ingliz tili</code>",
+        parse_mode="HTML",
+        reply_markup=cancel_kb()
+    )
+
+@dp.message(F.text == "📋 Mening buyurtmalarim")
+async def btn_my_orders(message: types.Message):
+    """Buyurtmalar tugmasi"""
+    await cmd_my_orders(message)
+
+@dp.message(F.text == "❓ Yordam")
+async def btn_help(message: types.Message):
+    """Yordam tugmasi"""
+    await cmd_help(message)
+
+@dp.message(F.text == "📞 Admin bilan bog'lanish")
+async def btn_contact_admin(message: types.Message):
+    """Admin bilan bog'lanish tugmasi"""
+    await message.answer(
+        "📞 <b>Admin bilan bog'lanish</b>\n\n"
+        "Savol yoki muammo bo'lsa, quyidagi ma'lumotlarni yuboring:\n\n"
+        "• Muammo tavsifi\n"
+        "• Buyurtma raqami (agar mavjud bo'lsa)\n"
+        "• Screenshot (agar kerak bo'lsa)\n\n"
+        "Admin tez orada javob beradi! ⏰",
+        parse_mode="HTML",
+        reply_markup=main_menu_kb()
+    )
+
+@dp.message(F.text == "❌ Bekor qilish")
+async def btn_cancel(message: types.Message):
+    """Bekor qilish tugmasi"""
+    # Agar faol buyurtma bo'lsa, uni bekor qilish
+    user_id = message.from_user.id
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await get_pending_order_for_user(db, user_id)
+        if row:
+            order_id = row[0]
+            await set_order_status(db, order_id, 'cancelled')
+            await message.answer(
+                f"❌ Buyurtma #{order_id} bekor qilindi.\n\n"
+                "Asosiy menyuga qaytdingiz.",
+                reply_markup=main_menu_kb()
+            )
+        else:
+            await message.answer(
+                "↩️ Asosiy menyuga qaytdingiz.",
+                reply_markup=main_menu_kb()
+            )
+
+@dp.message(F.text & ~F.text.startswith('/') & ~F.text.in_(["🔍 Qidirish", "📋 Mening buyurtmalarim", "❓ Yordam", "📞 Admin bilan bog'lanish", "❌ Bekor qilish"]))
+async def text_search_handler(message: types.Message):
+    """Matn orqali qidirish"""
+    qtext = message.text.strip()
+    
+    if len(qtext) < 2:
+        await message.reply("⚠️ Qidiruv uchun kamida 2 ta belgi kiriting.", reply_markup=main_menu_kb())
+        return
+    
+    # Qidiruv jarayoni
+    search_msg = await message.answer("🔍 Qidiryapman...")
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await search_files(db, qtext, limit=10)
+    
+    await search_msg.delete()
+    
+    if not rows:
+        await message.reply(
+            "😔 Afsuski, hech narsa topilmadi.\n\n"
+            "💡 Maslahat:\n"
+            "• Boshqa so'zlar bilan qidiring\n"
+            "• Imlo xatosi yo'qligiga ishonch hosil qiling\n"
+            "• Yoki 📞 Admin bilan bog'laning",
+            reply_markup=main_menu_kb()
+        )
+        return
+    
+    kb = files_list_kb(rows)
+    result_text = f"✅ <b>{len(rows)} ta fayl topildi!</b>\n\nKerakli faylni tanlang:"
+    await message.reply(result_text, reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("BUY:"))
+async def on_buy_callback(callback: types.CallbackQuery):
+    """Sotib olish tugmasi bosilganda"""
+    try:
+        _, rowid_s = callback.data.split(":", 1)
+        rowid = int(rowid_s)
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            row = await get_file_by_id(db, rowid)
+            
+            if not row:
+                await callback.answer("❌ Fayl topilmadi!", show_alert=True)
+                return
+            
+            # Oldingi tugallanmagan buyurtmani tekshirish
+            pending = await get_pending_order_for_user(db, callback.from_user.id)
+            if pending:
+                await callback.answer(
+                    "⚠️ Sizda tugallanmagan buyurtma bor! "
+                    "Avval uni yakunlang yoki admin bilan bog'laning.",
+                    show_alert=True
+                )
+                # Bosh menyuni ko'rsatish
+                await callback.message.answer(
+                    "Tugallanmagan buyurtmangiz bor. Screenshot yuboring yoki admin bilan bog'laning.",
+                    reply_markup=main_menu_kb()
+                )
+                return
+            
+            order_id = await create_order(
+                db,
+                callback.from_user.id,
+                callback.from_user.username or callback.from_user.full_name,
+                rowid
+            )
+        
+        price = row[4] or 0
+        title = row[1] or "Nomsiz fayl"
+        description = row[5] or "Tavsif yo'q"
+        
+        order_text = (
+            f"🛒 <b>Buyurtma #{order_id}</b>\n\n"
+            f"📄 <b>Fayl:</b> {title}\n"
+            f"📝 <b>Tavsif:</b> {description}\n"
+            f"💰 <b>Narxi:</b> {price:,} so'm\n\n"
+            f"💳 <b>To'lov kartasi:</b> <code>{PAYMENT_CARD}</code>\n\n"
+            f"📸 <b>Keyingi qadam:</b>\n"
+            f"1. Yuqoridagi karta raqamiga {price:,} so'm o'tkazing\n"
+            f"2. To'lov screenshotini shu chatga yuboring\n"
+            f"3. Admin tekshirib, faylni yuboradi\n\n"
+            f"⚠️ <i>Faqat to'g'ri screenshot yuboring!</i>"
+        )
+        
+        # Screenshot kutish rejimi - bosh menyuni yashirish
+        await callback.message.answer(
+            order_text, 
+            parse_mode="HTML",
+            reply_markup=cancel_kb()  # ← Faqat "Bekor qilish" tugmasi
+        )
+        await callback.answer()
+        
+    except Exception as e:
+        log.error(f"Error in buy callback: {e}")
+        await callback.answer("❌ Xatolik yuz berdi!", show_alert=True)
+
+@dp.message(F.photo)
+async def photo_handler(message: types.Message):
+    """Screenshot qabul qilish"""
+    user_id = message.from_user.id
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            # Aktiv buyurtmani topish
+            row = await get_pending_order_for_user(db, user_id)
+            
+            if not row:
+                await message.reply(
+                    "❌ Sizda faol buyurtma yo'q.\n\n"
+                    "Avval faylni tanlang va buyurtma bering.",
+                    reply_markup=main_menu_kb()
+                )
+                return
+            
+            order_id = row[0]
+            photo = message.photo[-1]
+            
+            # Screenshotni buyurtmaga biriktirish
+            await attach_screenshot_to_order(db, order_id, photo.file_id, photo.file_unique_id)
+            
+            # Buyurtma ma'lumotlarini olish
+            order = await get_order(db, order_id)
+            cur = await db.execute(
+                "SELECT id, title, price, channel_message_id FROM files WHERE id = ?",
+                (order[3],)
+            )
+            file_row = await cur.fetchone()
+            
+        except Exception as e:
+            log.error(f"Error in photo handler: {e}")
+            await message.reply(
+                "❌ Xatolik yuz berdi. Keyinroq urinib ko'ring.",
+                reply_markup=main_menu_kb()
+            )
+            return
+    
+    # Adminga xabar yuborish
+    username = message.from_user.username
+    full_name = message.from_user.full_name
+    user_link = f"@{username}" if username else full_name
+    
+    admin_caption = (
+        f"🔔 <b>YANGI TO'LOV TALABI</b>\n\n"
+        f"👤 <b>Buyurtmachi:</b> {user_link}\n"
+        f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
+        f"📄 <b>Fayl:</b> {file_row[1]}\n"
+        f"🆔 <b>Fayl ID:</b> {file_row[0]}\n"
+        f"💰 <b>Narxi:</b> {file_row[2]:,} so'm\n"
+        f"📋 <b>Order ID:</b> #{order_id}\n\n"
+        f"⏰ <b>Vaqt:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    
+    try:
+        await bot.send_photo(
+            chat_id=ADMIN_CHAT_ID,
+            photo=photo.file_id,
+            caption=admin_caption,
+            reply_markup=admin_order_kb(order_id),
+            parse_mode="HTML"
+        )
+        
+        # ASOSIY O'ZGARISH: Bosh menyuga qaytarish
+        await message.reply(
+            "✅ <b>Screenshot qabul qilindi!</b>\n\n"
+            "🕐 Admin tez orada tekshiradi va fayl yuboriladi.\n"
+            "⏰ Odatda 5-10 daqiqa ichida javob beramiz.\n\n"
+            "📋 Buyurtmangizni kuzatish uchun <b>📋 Mening buyurtmalarim</b> tugmasini bosing.",
+            parse_mode="HTML",
+            reply_markup=main_menu_kb()  # ← Bosh menyu
+        )
+        
+    except Exception as e:
+        log.error(f"Error sending to admin: {e}", exc_info=True)
+        await message.reply(
+            "⚠️ Screenshot qabul qilindi, lekin adminga yuborishda xatolik.\n"
+            "Iltimos admin bilan bog'laning.",
+            reply_markup=main_menu_kb()  # ← Bosh menyu
+        )
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("ADMIN_APPROVE:"))
+async def admin_approve_handler(callback: types.CallbackQuery):
+    """Admin tomonidan tasdiqlash"""
+    try:
+        _, order_id_s = callback.data.split(":", 1)
+        order_id = int(order_id_s)
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            order = await get_order(db, order_id)
+            
+            if not order:
+                await callback.message.edit_caption(
+                    caption="❌ Buyurtma topilmadi yoki allaqachon qayta ishlangan."
+                )
+                await callback.answer()
+                return
+            
+            if order[4] != 'pending_admin':
+                await callback.answer("⚠️ Bu buyurtma allaqachon qayta ishlangan!", show_alert=True)
+                return
+            
+            await set_order_status(db, order_id, 'approved')
+            
+            # Fayl ma'lumotlarini olish
+            cur = await db.execute(
+                "SELECT channel_message_id, backup_channel_message_id, title FROM files WHERE id = ?",
+                (order[3],)
+            )
+            file_row = await cur.fetchone()
+        
+        buyer_id = order[1]
+        file_sent = False
+        
+        # Asosiy kanaldan yuborishga harakat
+        if file_row[0]:
+            try:
+                await bot.copy_message(
+                    chat_id=buyer_id,
+                    from_chat_id=CHANNEL_ID,
+                    message_id=file_row[0]
+                )
+                file_sent = True
+            except Exception as e:
+                log.error(f"Error copying from main channel: {e}")
+        
+        # Backup kanaldan yuborish
+        if not file_sent and file_row[1]:
+            try:
+                await bot.copy_message(
+                    chat_id=buyer_id,
+                    from_chat_id=BACKUP_CHANNEL_ID,
+                    message_id=file_row[1]
+                )
+                file_sent = True
+            except Exception as e:
+                log.error(f"Error copying from backup channel: {e}")
+        
+        if file_sent:
+            # Foydalanuvchiga xabar
+            await bot.send_message(
+                chat_id=buyer_id,
+                text=(
+                    "🎉 <b>Tabriklaymiz!</b>\n\n"
+                    "✅ To'lovingiz tasdiqlandi va fayl yuborildi.\n"
+                    "📄 Yuqoridagi xabarda faylni topasiz.\n\n"
+                    "🙏 Xaridingiz uchun rahmat!\n"
+                    "🔄 Yana kerak bo'lsa, /start bosing."
+                ),
+                parse_mode="HTML"
+            )
+            
+            # Admin xabari
+            updated_caption = (
+                f"{callback.message.caption}\n\n"
+                f"✅ <b>TASDIQLANDI</b>\n"
+                f"👤 Admin: {callback.from_user.full_name}\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            await callback.message.edit_caption(caption=updated_caption, parse_mode="HTML")
+            await callback.answer("✅ Buyurtma tasdiqlandi va fayl yuborildi!", show_alert=True)
+        else:
+            await callback.answer("❌ Faylni yuborishda xatolik!", show_alert=True)
+            await bot.send_message(
+                chat_id=buyer_id,
+                text="⚠️ To'lovingiz tasdiqlandi, lekin faylni yuborishda xatolik. Admin bilan bog'laning."
+            )
+        
+    except Exception as e:
+        log.error(f"Error in admin approve: {e}")
+        await callback.answer("❌ Xatolik yuz berdi!", show_alert=True)
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("ADMIN_REJECT:"))
+async def admin_reject_handler(callback: types.CallbackQuery):
+    """Admin tomonidan rad etish"""
+    try:
+        _, order_id_s = callback.data.split(":", 1)
+        order_id = int(order_id_s)
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            order = await get_order(db, order_id)
+            
+            if not order:
+                await callback.message.edit_caption(caption="❌ Buyurtma topilmadi.")
+                await callback.answer()
+                return
+            
+            if order[4] in ['approved', 'rejected']:
+                await callback.answer("⚠️ Bu buyurtma allaqachon qayta ishlangan!", show_alert=True)
+                return
+            
+            await set_order_status(db, order_id, 'rejected')
+        
+        # Foydalanuvchiga xabar
+        await bot.send_message(
+            chat_id=order[1],
+            text=(
+                "❌ <b>To'lovingiz rad etildi</b>\n\n"
+                "Sababi: Screenshot noto'g'ri yoki to'lov summasi mos emas.\n\n"
+                "📞 Iltimos admin bilan bog'laning:\n"
+                "Muammo: to'lov tasdiqlanmadi\n"
+                f"Order ID: #{order_id}"
+            ),
+            parse_mode="HTML"
+        )
+        
+        # Admin xabari
+        updated_caption = (
+            f"{callback.message.caption}\n\n"
+            f"❌ <b>RAD ETILDI</b>\n"
+            f"👤 Admin: {callback.from_user.full_name}\n"
+            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        await callback.message.edit_caption(caption=updated_caption, parse_mode="HTML")
+        await callback.answer("❌ Buyurtma rad etildi!", show_alert=True)
+        
+    except Exception as e:
+        log.error(f"Error in admin reject: {e}")
+        await callback.answer("❌ Xatolik yuz berdi!", show_alert=True)
+
+# ---------- Channel post handler ----------
+@dp.channel_post()
+async def channel_post_handler(message: types.Message):
+    """Kanalga yangi post qo'shilganda avtomatik indekslash"""
+    # Faqat belgilangan kanallarni kuzatish
+    if message.chat.id not in [CHANNEL_ID, BACKUP_CHANNEL_ID]:
+        return
+    
+    caption = message.caption or ""
+    meta = parse_caption(caption)
+    
+    file_id, file_unique_id = None, None
+    
+    if message.document:
+        file_id = message.document.file_id
+        file_unique_id = message.document.file_unique_id
+    elif message.photo:
+        file_id = message.photo[-1].file_id
+        file_unique_id = message.photo[-1].file_unique_id
+    elif message.video:
+        file_id = message.video.file_id
+        file_unique_id = message.video.file_unique_id
+    elif message.audio:
+        file_id = message.audio.file_id
+        file_unique_id = message.audio.file_unique_id
+    else:
+        log.info(f"Unsupported media type in channel post")
+        return
+    
+    # Kanal turini aniqlash
+    if message.chat.id == BACKUP_CHANNEL_ID:
+        meta['backup_channel_message_id'] = message.message_id
+        meta['channel_message_id'] = None
+    else:
+        meta['channel_message_id'] = message.message_id
+        meta['backup_channel_message_id'] = None
+    
+    meta.update({
+        'file_id': file_id,
+        'file_unique_id': file_unique_id,
+        'caption': caption
+    })
+    
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            rowid = await insert_file_record(db, meta)
+        
+        log.info(
+            f"✅ Indexed new file: ID={rowid}, "
+            f"title='{meta.get('title', 'N/A')}', "
+            f"channel={'BACKUP' if message.chat.id == BACKUP_CHANNEL_ID else 'MAIN'}"
+        )
+        
+        # Adminga xabar (agar kerak bo'lsa)
+        if ADMIN_CHAT_ID and ADMIN_CHAT_ID != message.chat.id:
+            try:
+                await bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=(
+                        f"✅ <b>Yangi fayl indekslandi</b>\n\n"
+                        f"🆔 <b>ID:</b> {rowid}\n"
+                        f"📄 <b>Sarlavha:</b> {meta.get('title') or 'Kiritilmagan'}\n"
+                        f"📂 <b>Kategoriya:</b> {meta.get('category') or 'Yoq'}\n"
+                        f"🏷 <b>Teglar:</b> {meta.get('tags') or 'Yoq'}\n"
+                        f"💰 <b>Narx:</b> {meta.get('price', 0):,} som\n"
+                        f"📡 <b>Kanal:</b> {'Backup' if message.chat.id == BACKUP_CHANNEL_ID else 'Asosiy'}"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                log.error(f"Could not notify admin: {e}")
+    
+    except Exception as e:
+        log.error(f"Error indexing file: {e}")
+
+# ---------- Error handler ----------
+@dp.error()
+async def error_handler(event, exception):
+    """Global error handler"""
+    log.error(f"Error occurred: {exception}", exc_info=True)
+    return True
+
+
+# ---------- Startup ----------
+async def on_startup():
+    """Bot ishga tushganda"""
+    log.info("=" * 50)
+    log.info("🚀 Bot ishga tushmoqda...")
+    log.info(f"📋 Bot token: {BOT_TOKEN[:10]}...")
+    log.info(f"📡 Channel ID: {CHANNEL_ID}")
+    log.info(f"📡 Backup Channel ID: {BACKUP_CHANNEL_ID}")
+    log.info(f"👤 Admin Chat ID: {ADMIN_CHAT_ID}")
+    log.info(f"💳 Payment Card: {PAYMENT_CARD}")
+    log.info(f"🗄 Database: {DB_PATH}")
+    
+    # Ma'lumotlar bazasini yaratish
+    await init_db()
+    
+    # Bot ma'lumotlarini olish
+    try:
+        bot_info = await bot.get_me()
+        log.info(f"✅ Bot muvaffaqiyatli ulandi: @{bot_info.username}")
+        log.info(f"📝 Bot nomi: {bot_info.first_name}")
+        log.info(f"🆔 Bot ID: {bot_info.id}")
+    except Exception as e:
+        log.error(f"❌ Bot ma'lumotlarini olishda xatolik: {e}")
+    
+    log.info("=" * 50)
+
+async def on_shutdown():
+    """Bot to'xtaganda"""
+    log.info("🛑 Bot to'xtatilmoqda...")
+    await bot.session.close()
+    log.info("✅ Bot to'xtatildi")
+
+async def main():
+    """Asosiy funksiya"""
+    try:
+        await on_startup()
+        
+        # Botni ishga tushirish
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        
+    except KeyboardInterrupt:
+        log.info("⌨️ Keyboard interrupt - bot to'xtatilmoqda...")
+    except Exception as e:
+        log.error(f"❌ Fatal error: {e}", exc_info=True)
+    finally:
+        await on_shutdown()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("👋 Bot yakunlandi")
