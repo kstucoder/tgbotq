@@ -1545,10 +1545,102 @@ async def admin_forward_message(message: types.Message):
 def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
     """
     Web-app orqali kelgan referat matnidan .doc (Word) fayl yaratadi.
-    Yaratilgan vaqtinchalik fayl yo'lini qaytaradi.
+    Markdowndagi **qalin**, [RASM n:desc], va oddiy | jadval | sintaksisini
+    Word HTML ko‘rinishiga o‘giradi.
     """
     year = datetime.now().year
     safe_topic = re.sub(r"[^0-9A-Za-zА-Яа-яЎҚҒҲўқғҳ]+", "_", topic)[:40] or "referat"
+
+    # 1) Oddiy markdown bold: **matn** -> <strong>matn</strong>
+    content_processed = re.sub(
+        r"\*\*(.+?)\*\*",
+        r"<strong>\1</strong>",
+        content,
+        flags=re.DOTALL,
+    )
+
+    # 2) Frontenddagidek [RASM N:Tavsif] placeholderlarini HTML blokka aylantirish
+    def replace_rasm(match: re.Match) -> str:
+        num = match.group(1)
+        desc = match.group(2).strip()
+        return f"""
+        <div style="margin:16px 0;text-align:center;">
+          <div style="width:100%;height:120px;
+                      background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+                      display:flex;align-items:center;justify-content:center;
+                      border-radius:8px;">
+            <span style="color:white;font-size:14pt;font-weight:bold;
+                         text-align:center;padding:8px 16px;">
+              {desc}
+            </span>
+          </div>
+          <p style="text-indent:0;margin-top:4px;font-style:italic;">
+            Rasm {num}: {desc}
+          </p>
+        </div>
+        """
+
+    content_processed = re.sub(
+        r"\[RASM\s+(\d+):([^\]]+)\]",
+        replace_rasm,
+        content_processed,
+        flags=re.IGNORECASE,
+    )
+
+    # 3) Jadval bloklarini aniqlash va <table> ga aylantirish
+    lines = content_processed.splitlines()
+    html_blocks: list[str] = []
+    table_buffer: list[str] = []
+
+    def flush_table():
+        nonlocal table_buffer, html_blocks
+        if not table_buffer:
+            return
+        rows = table_buffer
+        table_buffer = []
+
+        # markdown jadvalidagi chiziq qatorlarini (|---|---|) tashlab yuboramiz
+        cleaned_rows = [
+            r for r in rows
+            if not re.match(r"^\s*\|?\s*-+\s*(\|\s*-+\s*)+\|?\s*$", r)
+        ]
+        if not cleaned_rows:
+            return
+
+        html = ['<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;margin:8px 0;font-size:12pt;">']
+        for i, row in enumerate(cleaned_rows):
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            tag = "th" if i == 0 else "td"
+            html.append("<tr>" + "".join(f"<{tag}>{c}</{tag}>" for c in cells) + "</tr>")
+        html.append("</table>")
+        html_blocks.append("\n".join(html))
+
+    for line in lines:
+        # jadval qatormi? | col1 | col2 |
+        if re.match(r"^\s*\|.*\|\s*$", line):
+            table_buffer.append(line)
+            continue
+
+        # jadval bloki tugadi
+        if table_buffer:
+            flush_table()
+
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Agar satr ichida allaqachon <div>, <table> va h.k. bo‘lsa, to‘g‘ridan-to‘g‘ri qo‘shamiz
+        if stripped.lstrip().startswith("<"):
+            html_blocks.append(stripped)
+        else:
+            # oddiy paragraf
+            html_blocks.append(f"<p>{stripped}</p>")
+
+    # oxiridagi jadvalni ham chiqarib yuboramiz
+    if table_buffer:
+        flush_table()
+
+    body_inner_html = "\n".join(html_blocks)
 
     html = f"""
     <html xmlns:o='urn:schemas-microsoft-com:office:office'
@@ -1562,12 +1654,14 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         body {{ font-family:'Times New Roman'; font-size:14pt; line-height:1.5; text-align:justify; }}
         h1, h2 {{ text-align:center; }}
         p {{ text-indent:1.25cm; margin-bottom:0.3cm; }}
+        table {{ width:100%; }}
+        th {{ font-weight:bold; text-align:center; }}
       </style>
     </head>
     <body>
       <h1>{work_type_name.upper()}</h1>
       <h2>{topic}</h2>
-      {''.join(f'<p>{line.strip()}</p>' for line in content.splitlines() if line.strip())}
+      {body_inner_html}
       <p style="text-indent:0;margin-top:40px;">Toshkent - {year}</p>
     </body>
     </html>
@@ -1578,6 +1672,7 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     return path
+
 
 
 # CORS uchun ruxsat etilgan origin (frontend domeni bilan bir xil)
