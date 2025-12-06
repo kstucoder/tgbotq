@@ -1672,7 +1672,7 @@ def build_title_page_html(topic: str, work_type_name: str, year: int | None = No
     <div style="width:100%; text-align:center; line-height:1.5;">
 
       <!-- Vazirlik nomi -->
-      <p style="margin-top:40px; margin-bottom:0; text-align:center; text-indent:0; font-size:14pt; font-weight:bold; text-transform:uppercase;">
+      <p style="margin-top:40px; margin-bottom:0; text-align:center; text-indent:0; font-size:18pt; font-weight:bold; text-transform:uppercase;">
         {t["top"]}
       </p>
 
@@ -1730,7 +1730,7 @@ def build_title_page_html(topic: str, work_type_name: str, year: int | None = No
       <p style="margin:0; text-indent:0;">&nbsp;</p>
       <p style="margin:0; text-indent:0;">&nbsp;</p>  
       <!-- Sahifa pastidagi yil -->
-      <p style="margin-top:120px; margin-bottom:0; text-align:center; text-indent:0; font-size:12pt;">
+      <p style="margin-top:120px; margin-bottom:0; text-align:center; text-indent:0; font-size:22pt;">
         {year}
       </p>
     </div>
