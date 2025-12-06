@@ -1609,7 +1609,7 @@ def clean_ai_content(raw: str) -> str:
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
 
     # Juda ko'p bo'sh qatorlarni qisqartirish
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\n{2,}", "\n\n", text)
 
     return text.strip()
 
