@@ -1539,19 +1539,58 @@ async def admin_forward_message(message: types.Message):
 
         return
 
+# === REFERAT / MUSTAQIL ISH UCHUN TITUL SHABLONI VA FORMAT FUNKSIYALARI ===
 
-# ---------- Referat uchun .doc fayl yasash (WebApp oqimi) ----------
+TITLE_TEMPLATE = {
+    "top1": "O‘zbekiston Respublikasi Oliy ta’lim, fan va innovatsiyalar vazirligi",
+    "top2": "_______________________________ universiteti",
+    "faculty": "________________ fakulteti",
+    "department": "________________ kafedrasi",
+    "city": "Toshkent",
+}
 
-def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
+
+def clean_ai_content(raw: str) -> str:
     """
-    Web-app orqali kelgan referat matnidan .doc (Word) fayl yaratadi.
-    Markdowndagi **qalin**, [RASM n:desc], va oddiy | jadval | sintaksisini
-    Word HTML ko‘rinishiga o‘giradi.
+    Firebase (AI) dan kelgan matnni biroz tozalab beradi:
+    - oxiridagi 'Izoh:' blokini kesadi
+    - '---' chiziqlarni olib tashlaydi
+    - '### 1. Kirish' kabi heading belgilari (#) ni olib tashlaydi
+    - ortiqcha bo'sh qatordan tozalaydi
     """
-    year = datetime.now().year
-    safe_topic = re.sub(r"[^0-9A-Za-zА-Яа-яЎҚҒҲўқғҳ]+", "_", topic)[:40] or "referat"
+    text = raw or ""
 
-    # 1) Oddiy markdown bold: **matn** -> <strong>matn</strong>
+    # Oxirida keladigan Izoh / Eslatma bloklari bo'lsa, kesib tashlaymiz
+    text = re.sub(
+        r"\n+\s*(Izoh|Eslatma)\s*:.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    # Markdown horizontal rule: --- qatorini o'chirish
+    text = re.sub(r"^\s*---\s*$", "", text, flags=re.MULTILINE)
+
+    # ### 1. Kirish -> 1. Kirish (heading belgilari (#) ni olib tashlash)
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+
+    # Juda ko'p bo'sh qatorlarni qisqartirish
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def ai_content_to_html_paragraphs(content: str) -> str:
+    """
+    Firebase’dan kelgan matnni Word uchun HTML'ga aylantiradi:
+    - **qalin** -> <strong>qalin</strong>
+    - markdown jadval satrlarini | col1 | col2 | -> <table>...
+    - qolgan satrlarni <p>...</p> ga aylantiradi
+    """
+    if not content:
+        return ""
+
+    # 1) Qalin shrift: **matn** -> <strong>matn</strong>
     content_processed = re.sub(
         r"\*\*(.+?)\*\*",
         r"<strong>\1</strong>",
@@ -1559,35 +1598,6 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         flags=re.DOTALL,
     )
 
-    # 2) Frontenddagidek [RASM N:Tavsif] placeholderlarini HTML blokka aylantirish
-    def replace_rasm(match: re.Match) -> str:
-        num = match.group(1)
-        desc = match.group(2).strip()
-        return f"""
-        <div style="margin:16px 0;text-align:center;">
-          <div style="width:100%;height:120px;
-                      background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
-                      display:flex;align-items:center;justify-content:center;
-                      border-radius:8px;">
-            <span style="color:white;font-size:14pt;font-weight:bold;
-                         text-align:center;padding:8px 16px;">
-              {desc}
-            </span>
-          </div>
-          <p style="text-indent:0;margin-top:4px;font-style:italic;">
-            Rasm {num}: {desc}
-          </p>
-        </div>
-        """
-
-    content_processed = re.sub(
-        r"\[RASM\s+(\d+):([^\]]+)\]",
-        replace_rasm,
-        content_processed,
-        flags=re.IGNORECASE,
-    )
-
-    # 3) Jadval bloklarini aniqlash va <table> ga aylantirish
     lines = content_processed.splitlines()
     html_blocks: list[str] = []
     table_buffer: list[str] = []
@@ -1599,7 +1609,7 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         rows = table_buffer
         table_buffer = []
 
-        # markdown jadvalidagi chiziq qatorlarini (|---|---|) tashlab yuboramiz
+        # Markdown jadvalidagi separator (|---|---|) qatorlarini olib tashlash
         cleaned_rows = [
             r for r in rows
             if not re.match(r"^\s*\|?\s*-+\s*(\|\s*-+\s*)+\|?\s*$", r)
@@ -1607,7 +1617,10 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         if not cleaned_rows:
             return
 
-        html = ['<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;margin:8px 0;font-size:12pt;">']
+        html = [
+            '<table border="1" cellspacing="0" cellpadding="4" '
+            'style="border-collapse:collapse;margin:8px 0;font-size:12pt; width:100%;">'
+        ]
         for i, row in enumerate(cleaned_rows):
             cells = [c.strip() for c in row.strip().strip("|").split("|")]
             tag = "th" if i == 0 else "td"
@@ -1616,12 +1629,12 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         html_blocks.append("\n".join(html))
 
     for line in lines:
-        # jadval qatormi? | col1 | col2 |
+        # Jadval qatori: | col1 | col2 |
         if re.match(r"^\s*\|.*\|\s*$", line):
             table_buffer.append(line)
             continue
 
-        # jadval bloki tugadi
+        # Jadval tugagan bo‘lishi mumkin
         if table_buffer:
             flush_table()
 
@@ -1629,19 +1642,76 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         if not stripped:
             continue
 
-        # Agar satr ichida allaqachon <div>, <table> va h.k. bo‘lsa, to‘g‘ridan-to‘g‘ri qo‘shamiz
+        # Agar satr allaqachon HTML tag bilan boshlansa (<div>, <table> va h.k.)
         if stripped.lstrip().startswith("<"):
             html_blocks.append(stripped)
         else:
-            # oddiy paragraf
             html_blocks.append(f"<p>{stripped}</p>")
 
-    # oxiridagi jadvalni ham chiqarib yuboramiz
+    # Oxirgi jadval bo'lsa, uni ham flush qilamiz
     if table_buffer:
         flush_table()
 
-    body_inner_html = "\n".join(html_blocks)
+    return "\n".join(html_blocks)
 
+
+def build_title_page_html(topic: str, work_type_name: str, year: int | None = None) -> str:
+    """
+    Bitta umumiy TITUL sahifa shabloni (hamma foydalanuvchi uchun bir xil).
+    """
+    if year is None:
+        year = datetime.now().year
+
+    t = TITLE_TEMPLATE
+    city = t.get("city", "Toshkent")
+
+    return f"""
+    <div style="width:100%; text-align:center; margin-top:40px;">
+      <div style="font-size:14pt; font-weight:bold; text-transform:uppercase; line-height:1.4;">
+        {t["top1"]}<br/>
+        {t["top2"]}<br/>
+        {t["faculty"]}<br/>
+        {t["department"]}
+      </div>
+
+      <div style="margin-top:80px; font-size:16pt; font-weight:bold; text-transform:uppercase;">
+        {work_type_name}
+      </div>
+
+      <div style="margin-top:30px; font-size:14pt;">
+        Mavzu: <b>“{topic}”</b>
+      </div>
+
+      <div style="margin-top:120px; font-size:14pt; text-align:center;">
+        {city} – {year}
+      </div>
+    </div>
+
+    <!-- Sahifa ajratish (keyingi betdan asosiy matn) -->
+    <br style="page-break-before:always; mso-special-character:line-break;" />
+    """
+
+# ---------- Referat uchun .doc fayl yasash (WebApp oqimi) ----------
+
+def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
+    """
+    WebApp orqali kelgan matndan TITUL + asosiy matnli .doc (Word) fayl yaratadi.
+    1-bet: umumiy titul
+    2-betdan: Firebase matni (qalin/jadval bilan)
+    """
+    year = datetime.now().year
+    safe_topic = re.sub(r"[^0-9A-Za-zА-Яа-яЎҚҒҲўқғҳ]+", "_", topic)[:40] or "referat"
+
+    # 1) Firebase / Groq'dan kelgan matnni biroz tozalab olamiz
+    cleaned = clean_ai_content(content)
+
+    # 2) Titul sahifani HTML ko‘rinishida olamiz
+    title_html = build_title_page_html(topic=topic, work_type_name=work_type_name, year=year)
+
+    # 3) Asosiy matnni HTML paragraflarga/jadvallarga aylantiramiz
+    body_html = ai_content_to_html_paragraphs(cleaned)
+
+    # 4) Umumiy Word HTML hujjat
     html = f"""
     <html xmlns:o='urn:schemas-microsoft-com:office:office'
           xmlns:w='urn:schemas-microsoft-com:office:word'
@@ -1651,18 +1721,31 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
       <title>{work_type_name} - {topic}</title>
       <style>
         @page {{ size:A4; margin:2cm 2.5cm 2cm 3cm; }}
-        body {{ font-family:'Times New Roman'; font-size:14pt; line-height:1.5; text-align:justify; }}
-        h1, h2 {{ text-align:center; }}
-        p {{ text-indent:1.25cm; margin-bottom:0.3cm; }}
-        table {{ width:100%; }}
-        th {{ font-weight:bold; text-align:center; }}
+        body {{
+          font-family:'Times New Roman';
+          font-size:14pt;
+          line-height:1.5;
+          text-align:justify;
+        }}
+        p {{
+          text-indent:1.25cm;
+          margin-bottom:0.3cm;
+        }}
+        table {{
+          border-collapse:collapse;
+        }}
+        th {{
+          font-weight:bold;
+          text-align:center;
+        }}
+        td {{
+          vertical-align:top;
+        }}
       </style>
     </head>
     <body>
-      <h1>{work_type_name.upper()}</h1>
-      <h2>{topic}</h2>
-      {body_inner_html}
-      <p style="text-indent:0;margin-top:40px;">Toshkent - {year}</p>
+      {title_html}
+      {body_html}
     </body>
     </html>
     """
@@ -1673,6 +1756,7 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         f.write(html)
     return path
 
+    
 
 
 # CORS uchun ruxsat etilgan origin (frontend domeni bilan bir xil)
