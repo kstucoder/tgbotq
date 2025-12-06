@@ -1654,12 +1654,14 @@ def ai_content_to_html_paragraphs(content: str) -> str:
 
 def build_title_page_html(topic: str, work_type_name: str, year: int | None = None) -> str:
     """
-    Titul sahifa: rasmda ko‘rsatilgan klassik ko‘rinish:
-    - yuqorida vazirlik nomi
-    - 3 ta chiziq: ______ UNIVERSITETI / FAKULTETI / KAFEDRASI
-    - o‘rtada katta 'REFERAT' (yoki work_type_name)
-    - 'Mavzu: “...”' qizil rangda
-    - pastda faqat yil
+    Klassik titul:
+    - hammasi o'rtaga tekislangan
+    - interval ~1.5
+    - tepa: vazirlik
+    - 4 ta bo'sh qator
+    - 2 qator oraliq bilan: UNIVERSITETI, FAKULTETI, KAFEDRASI, Mavzu qatori
+    - 26 pt da ish turi (work_type_name, masalan: MUSTAQIL ISH yoki REFERAT)
+    - sahifa oxirida faqat yil
     """
     if year is None:
         year = datetime.now().year
@@ -1667,51 +1669,57 @@ def build_title_page_html(topic: str, work_type_name: str, year: int | None = No
     t = TITLE_TEMPLATE
 
     return f"""
-    <div style="width:100%; text-align:center; margin-top:40px;">
+    <div style="width:100%; text-align:center; line-height:1.5;">
 
       <!-- Vazirlik nomi -->
-      <div style="font-size:14pt; font-weight:bold; text-transform:uppercase; line-height:1.4;">
+      <p style="margin-top:40px; margin-bottom:0; text-align:center; text-indent:0; font-size:14pt; font-weight:bold; text-transform:uppercase;">
         {t["top"]}
-      </div>
+      </p>
 
-      <!-- Universitet / fakultet / kafedra chiziqlari -->
-      <div style="margin-top:80px; font-size:12pt; width:100%; text-align:left;">
-        <div style="margin-bottom:20px;">
-          <span style="display:inline-block; width:60%;">__________________________</span>
-          <span style="display:inline-block; width:35%; text-align:right;">UNIVERSITETI</span>
-        </div>
-        <div style="margin-bottom:20px;">
-          <span style="display:inline-block; width:60%;">__________________________</span>
-          <span style="display:inline-block; width:35%; text-align:right;">FAKULTETI</span>
-        </div>
-        <div style="margin-bottom:20px;">
-          <span style="display:inline-block; width:60%;">__________________________</span>
-          <span style="display:inline-block; width:35%; text-align:right;">KAFEDRASI</span>
-        </div>
-      </div>
+      <!-- 4 ta bo'sh qator -->
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
 
-      <!-- Ish turi (REFERAT va h.k.) -->
-      <div style="margin-top:80px; font-size:16pt; font-weight:bold;">
+      <!-- UNIVERSITETI -->
+      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:12pt;">
+        __________________________ UNIVERSITETI
+      </p>
+
+      <!-- FAKULTETI -->
+      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:12pt;">
+        __________________________ FAKULTETI
+      </p>
+
+      <!-- KAFEDRASI -->
+      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:12pt;">
+        __________________________ KAFEDRASI
+      </p>
+
+      <!-- Yana kichik bo'sh joy -->
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+
+      <!-- Ish turi (26 pt) -->
+      <p style="margin-top:0; margin-bottom:24px; text-align:center; text-indent:0; font-size:26pt; font-weight:bold;">
         {work_type_name.upper()}
-      </div>
+      </p>
 
       <!-- Mavzu qatori -->
-      <div style="margin-top:40px; font-size:14pt;">
-        <span>Mavzu: </span>
-        <span style="color:#c00000;">“{topic}”</span>
-      </div>
+      <p style="margin-top:0; margin-bottom:0; text-align:center; text-indent:0; font-size:14pt;">
+        Mavzu: <span style="color:#c00000;">“{topic}”</span>
+      </p>
 
-      <!-- Yil pastda markazda -->
-      <div style="margin-top:120px; font-size:12pt;">
+      <!-- Sahifa pastidagi yil -->
+      <p style="margin-top:120px; margin-bottom:0; text-align:center; text-indent:0; font-size:12pt;">
         {year}
-      </div>
+      </p>
     </div>
 
-    <!-- Keyingi betdan asosiy matn -->
+    <!-- Keyingi betdan asosiy matn boshlansin -->
     <br style="page-break-before:always; mso-special-character:line-break;" />
     """
-
-    
 
 # ---------- Referat uchun .doc fayl yasash (WebApp oqimi) ----------
 
