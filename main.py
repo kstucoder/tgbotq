@@ -1681,23 +1681,29 @@ def build_title_page_html(topic: str, work_type_name: str, year: int | None = No
       <p style="margin:0; text-indent:0;">&nbsp;</p>
       <p style="margin:0; text-indent:0;">&nbsp;</p>
       <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
 
       <!-- UNIVERSITETI -->
-      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:12pt;">
-        __________________________ UNIVERSITETI
+      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:18pt;">
+        ___________________________________ UNIVERSITETI
       </p>
 
       <!-- FAKULTETI -->
-      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:12pt;">
-        __________________________ FAKULTETI
+      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:18pt;">
+        ___________________________________ FAKULTETI
       </p>
 
       <!-- KAFEDRASI -->
-      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:12pt;">
-        __________________________ KAFEDRASI
+      <p style="margin-top:0; margin-bottom:16px; text-align:center; text-indent:0; font-size:18pt;">
+        ___________________________________ KAFEDRASI
       </p>
 
       <!-- Yana kichik bo'sh joy -->
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
       <p style="margin:0; text-indent:0;">&nbsp;</p>
       <p style="margin:0; text-indent:0;">&nbsp;</p>
 
@@ -1705,12 +1711,24 @@ def build_title_page_html(topic: str, work_type_name: str, year: int | None = No
       <p style="margin-top:0; margin-bottom:24px; text-align:center; text-indent:0; font-size:26pt; font-weight:bold;">
         {work_type_name.upper()}
       </p>
-
+      <!-- Yana kichik bo'sh joy -->
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
       <!-- Mavzu qatori -->
       <p style="margin-top:0; margin-bottom:0; text-align:center; text-indent:0; font-size:14pt;">
         Mavzu: <span style="color:#c00000;">“{topic}”</span>
       </p>
-
+      <!-- Yana kichik bo'sh joy -->
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>
+      <p style="margin:0; text-indent:0;">&nbsp;</p>  
       <!-- Sahifa pastidagi yil -->
       <p style="margin-top:120px; margin-bottom:0; text-align:center; text-indent:0; font-size:12pt;">
         {year}
