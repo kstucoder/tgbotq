@@ -1542,12 +1542,9 @@ async def admin_forward_message(message: types.Message):
 # === REFERAT / MUSTAQIL ISH UCHUN TITUL SHABLONI VA FORMAT FUNKSIYALARI ===
 
 TITLE_TEMPLATE = {
-    "top1": "O‘zbekiston Respublikasi Oliy ta’lim, fan va innovatsiyalar vazirligi",
-    "top2": "_______________________________ universiteti",
-    "faculty": "________________ fakulteti",
-    "department": "________________ kafedrasi",
-    "city": "Toshkent",
+    "top": "O‘ZBEKISTON RESPUBLIKASI OLIY TA’LIM, FAN VA INNOVATSIYALAR VAZIRLIGI",
 }
+
 
 
 def clean_ai_content(raw: str) -> str:
@@ -1657,39 +1654,64 @@ def ai_content_to_html_paragraphs(content: str) -> str:
 
 def build_title_page_html(topic: str, work_type_name: str, year: int | None = None) -> str:
     """
-    Bitta umumiy TITUL sahifa shabloni (hamma foydalanuvchi uchun bir xil).
+    Titul sahifa: rasmda ko‘rsatilgan klassik ko‘rinish:
+    - yuqorida vazirlik nomi
+    - 3 ta chiziq: ______ UNIVERSITETI / FAKULTETI / KAFEDRASI
+    - o‘rtada katta 'REFERAT' (yoki work_type_name)
+    - 'Mavzu: “...”' qizil rangda
+    - pastda faqat yil
     """
     if year is None:
         year = datetime.now().year
 
     t = TITLE_TEMPLATE
-    city = t.get("city", "Toshkent")
 
     return f"""
     <div style="width:100%; text-align:center; margin-top:40px;">
+
+      <!-- Vazirlik nomi -->
       <div style="font-size:14pt; font-weight:bold; text-transform:uppercase; line-height:1.4;">
-        {t["top1"]}<br/>
-        {t["top2"]}<br/>
-        {t["faculty"]}<br/>
-        {t["department"]}
+        {t["top"]}
       </div>
 
-      <div style="margin-top:80px; font-size:16pt; font-weight:bold; text-transform:uppercase;">
-        {work_type_name}
+      <!-- Universitet / fakultet / kafedra chiziqlari -->
+      <div style="margin-top:80px; font-size:12pt; width:100%; text-align:left;">
+        <div style="margin-bottom:20px;">
+          <span style="display:inline-block; width:60%;">__________________________</span>
+          <span style="display:inline-block; width:35%; text-align:right;">UNIVERSITETI</span>
+        </div>
+        <div style="margin-bottom:20px;">
+          <span style="display:inline-block; width:60%;">__________________________</span>
+          <span style="display:inline-block; width:35%; text-align:right;">FAKULTETI</span>
+        </div>
+        <div style="margin-bottom:20px;">
+          <span style="display:inline-block; width:60%;">__________________________</span>
+          <span style="display:inline-block; width:35%; text-align:right;">KAFEDRASI</span>
+        </div>
       </div>
 
-      <div style="margin-top:30px; font-size:14pt;">
-        Mavzu: <b>“{topic}”</b>
+      <!-- Ish turi (REFERAT va h.k.) -->
+      <div style="margin-top:80px; font-size:16pt; font-weight:bold;">
+        {work_type_name.upper()}
       </div>
 
-      <div style="margin-top:120px; font-size:14pt; text-align:center;">
-        {city} – {year}
+      <!-- Mavzu qatori -->
+      <div style="margin-top:40px; font-size:14pt;">
+        <span>Mavzu: </span>
+        <span style="color:#c00000;">“{topic}”</span>
+      </div>
+
+      <!-- Yil pastda markazda -->
+      <div style="margin-top:120px; font-size:12pt;">
+        {year}
       </div>
     </div>
 
-    <!-- Sahifa ajratish (keyingi betdan asosiy matn) -->
+    <!-- Keyingi betdan asosiy matn -->
     <br style="page-break-before:always; mso-special-character:line-break;" />
     """
+
+    
 
 # ---------- Referat uchun .doc fayl yasash (WebApp oqimi) ----------
 
