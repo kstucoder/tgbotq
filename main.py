@@ -1728,9 +1728,8 @@ def build_title_page_html(topic: str, work_type_name: str, year: int | None = No
       <p style="margin:0; text-indent:0;">&nbsp;</p>
       <p style="margin:0; text-indent:0;">&nbsp;</p>
       <p style="margin:0; text-indent:0;">&nbsp;</p>
-      <p style="margin:0; text-indent:0;">&nbsp;</p>  
       <!-- Sahifa pastidagi yil -->
-      <p style="margin-top:120px; margin-bottom:0; text-align:center; text-indent:0; font-size:22pt;">
+      <p style="margin-top:120px; margin-bottom:0; text-align:center; text-indent:0; font-size:16pt;">
         {year}
       </p>
     </div>
