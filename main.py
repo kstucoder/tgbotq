@@ -5,6 +5,10 @@ import asyncio
 import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional
+import requests  # AI image uchun HTTP chaqiriq (agar image_ai ichiga ko‘chirmoqchi bo‘lmasangiz)
+
+from image_ai import inject_ai_images_into_content
+
 
 from dotenv import load_dotenv
 import aiosqlite
@@ -1619,10 +1623,12 @@ def ai_content_to_html_paragraphs(content: str) -> str:
     Firebase’dan kelgan matnni Word uchun HTML'ga aylantiradi:
     - **qalin** -> <strong>qalin</strong>
     - markdown jadval satrlarini | col1 | col2 | -> <table>...
-    - qolgan satrlarni <p>...</p> ga aylantiradi
+    - 1. Kirish, 2. Asosiy qism, 3. Xulosa, 4. Foydalanilgan adabiyotlar sarlavhalarini alohida formatlaydi
+    - 4. Foydalanilgan adabiyotlar bo'limi alohida sahifadan boshlanadi
     """
     if not content:
         return ""
+    # LaTeX formulalarni img tegiga aylantiramiz
     content = replace_latex_with_images(content)
 
     # 1) Qalin shrift: **matn** -> <strong>matn</strong>
@@ -1675,6 +1681,47 @@ def ai_content_to_html_paragraphs(content: str) -> str:
 
         stripped = line.strip()
         if not stripped:
+            continue
+
+        # === Asosiy bo'lim sarlavhalari ===
+        # 1. Kirish
+        if re.match(r"^1\.\s*Kirish\s*$", stripped, flags=re.IGNORECASE):
+            html_blocks.append(
+                '<p class="section-title-main">1. Kirish</p>'
+            )
+            continue
+
+        # 2. Asosiy qism
+        if re.match(r"^2\.\s*Asosiy qism\s*$", stripped, flags=re.IGNORECASE):
+            html_blocks.append(
+                '<p class="section-title-main">2. Asosiy qism</p>'
+            )
+            continue
+
+        # 3. Xulosa
+        if re.match(r"^3\.\s*Xulosa\s*$", stripped, flags=re.IGNORECASE):
+            html_blocks.append(
+                '<p class="section-title-main">3. Xulosa</p>'
+            )
+            continue
+
+        # 4. Foydalanilgan adabiyotlar — alohida sahifadan boshlansin
+        if re.match(r"^4\.\s*Foydalanilgan adabiyotlar", stripped, flags=re.IGNORECASE):
+            # Yangi sahifadan boshlash
+            html_blocks.append(
+                '<br style="page-break-before:always; mso-special-character:line-break;" />'
+            )
+            html_blocks.append(
+                '<p class="section-title-main">4. Foydalanilgan adabiyotlar</p>'
+            )
+            continue
+
+        # === Ichki bo'limlar: 2.1. ..., 2.2. ... va hokazo ===
+        # Masalan: 2.1. Sun'iy intellekt tushunchasi
+        if re.match(r"^\d+\.\d+\.\s+.+$", stripped):
+            html_blocks.append(
+                f'<p class="section-title-sub">{stripped}</p>'
+            )
             continue
 
         # Agar satr allaqachon HTML tag bilan boshlansa (<div>, <table> va h.k.)
@@ -1782,21 +1829,23 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
     """
     WebApp orqali kelgan matndan TITUL + asosiy matnli .doc (Word) fayl yaratadi.
     1-bet: umumiy titul
-    2-betdan: Firebase matni (qalin/jadval bilan)
+    2-betdan: AI rasmlari qo‘shilgan matn
     """
     year = datetime.now().year
     safe_topic = re.sub(r"[^0-9A-Za-zА-Яа-яЎҚҒҲўқғҳ]+", "_", topic)[:40] or "referat"
 
     # 1) Firebase / Groq'dan kelgan matnni biroz tozalab olamiz
     cleaned = clean_ai_content(content)
+    # 2) [RASM n: ...] markerlarini AI rasmlari bilan almashtiramiz (faqat backendda)
+    with_images = inject_ai_images_into_content(cleaned)
 
-    # 2) Titul sahifani HTML ko‘rinishida olamiz
+    # 3) Titul sahifani HTML ko‘rinishida olamiz
     title_html = build_title_page_html(topic=topic, work_type_name=work_type_name, year=year)
 
-    # 3) Asosiy matnni HTML paragraflarga/jadvallarga aylantiramiz
-    body_html = ai_content_to_html_paragraphs(cleaned)
+    # 4) Asosiy matnni HTML paragraflarga/jadvallarga aylantiramiz
+    body_html = ai_content_to_html_paragraphs(with_images)
 
-    # 4) Umumiy Word HTML hujjat
+    # 5) Umumiy Word HTML hujjat
     html = f"""
     <html xmlns:o='urn:schemas-microsoft-com:office:office'
           xmlns:w='urn:schemas-microsoft-com:office:word'
@@ -1826,6 +1875,29 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         td {{
           vertical-align:top;
         }}
+        .image-container {{
+          text-align:center;
+          margin:0.7cm 0;
+        }}
+        .image-container p {{
+          text-indent:0;
+          margin:0;
+          text-align:center;
+        }}
+        .section-title-main {{
+          text-indent:0;
+          font-weight:bold;
+          text-align:center;
+          margin-top:0.7cm;
+          margin-bottom:0.4cm;
+          font-size:16pt;
+        }}
+        .section-title-sub {{
+          text-indent:0;
+          font-weight:bold;
+          margin-top:0.5cm;
+          margin-bottom:0.2cm;
+        }}
       </style>
     </head>
     <body>
@@ -1840,8 +1912,6 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     return path
-
-    
 
 
 # CORS uchun ruxsat etilgan origin (frontend domeni bilan bir xil)
