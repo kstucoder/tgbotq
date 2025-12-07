@@ -1605,6 +1605,14 @@ def clean_ai_content(raw: str) -> str:
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
+        # 👇👇👇 SHU YANGI QATORNI QO‘SHASIZ 👇👇👇
+    # Maxsus marker-qatorni butunlay olib tashlash
+    text = re.sub(
+        r"^\s*\[FOYDALANILGAN ADABIYOTLAR YANGI SAHIFA\]\s*$",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
 
     # Markdown horizontal rule: --- qatorini o'chirish
     text = re.sub(r"^\s*---\s*$", "", text, flags=re.MULTILINE)
