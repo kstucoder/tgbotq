@@ -1,4 +1,7 @@
 aiogram
 aiosqlite
+requests
 python-dotenv
+
+
 
