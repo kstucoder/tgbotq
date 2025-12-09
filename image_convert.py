@@ -76,25 +76,23 @@ def latex_to_data_url(tex: str, dpi: int = 150) -> str:
 def latex_to_img_tag(tex: str, block: bool = False) -> str:
     """
     LaTeX matnni CodeCogs asosidagi PNG rasmga aylantiruvchi <img> teg.
-    block=True bo'lsa, formulani alohida qator (markazda), 
+    Rasm SRC ichiga data:image/...;base64,... qo'yiladi, shuning uchun WORD OFFLINE ishlaydi.
+    block=True bo'lsa, formulani alohida qator (markazda),
     block=False bo'lsa, matn ichida inline ko'rinishda beradi.
     """
-    # Ortiqcha probel va newlinelarni qisqartiramiz
+    # LaTeX'dagi ortiqcha probel va newlinelarni qisqartiramiz
     cleaned = " ".join(tex.strip().split())
-    # CodeCogs uchun URL encoding (bo'shliqlarni + ga aylantiradi)
-    encoded = quote_plus(cleaned)
-    # Klassik endpoint: png.latex – fon oq, matn qora
-    src = f"https://latex.codecogs.com/png.latex?\\dpi{{150}} {encoded}"
 
-    # Block va inline uchun turli style
+    # Oldindan yozilgan helper: codecogs PNG URL -> data:image/...;base64,...
+    data_src = latex_to_data_url(cleaned, dpi=150)
+
     if block:
-        # Ekran markazida, yuqori/pastda joy ochib, katta formula ko‘rinishida
         style = "display:block; margin:12px auto; vertical-align:middle;"
     else:
-        # Matn orasida kichik formula
         style = "display:inline-block; margin:0 2px; vertical-align:middle;"
 
-    return f'<img src="{src}" style="{style}" />'
+    return f'<img src="{data_src}" style="{style}" />'
+
 
 
 
