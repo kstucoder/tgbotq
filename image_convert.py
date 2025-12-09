@@ -73,10 +73,11 @@ def latex_to_data_url(tex: str, dpi: int = 150) -> str:
     return url_to_data_img_src(src_url)
 
 
-def latex_to_img_tag(tex: str) -> str:
+def latex_to_img_tag(tex: str, block: bool = False) -> str:
     """
     LaTeX matnni CodeCogs asosidagi PNG rasmga aylantiruvchi <img> teg.
-    (Word HTML ichida ishlaydi)
+    block=True bo'lsa, formulani alohida qator (markazda), 
+    block=False bo'lsa, matn ichida inline ko'rinishda beradi.
     """
     # Ortiqcha probel va newlinelarni qisqartiramiz
     cleaned = " ".join(tex.strip().split())
@@ -84,7 +85,17 @@ def latex_to_img_tag(tex: str) -> str:
     encoded = quote_plus(cleaned)
     # Klassik endpoint: png.latex – fon oq, matn qora
     src = f"https://latex.codecogs.com/png.latex?\\dpi{{150}} {encoded}"
-    return f'<img src="{src}" style="vertical-align:middle;" />'
+
+    # Block va inline uchun turli style
+    if block:
+        # Ekran markazida, yuqori/pastda joy ochib, katta formula ko‘rinishida
+        style = "display:block; margin:12px auto; vertical-align:middle;"
+    else:
+        # Matn orasida kichik formula
+        style = "display:inline-block; margin:0 2px; vertical-align:middle;"
+
+    return f'<img src="{src}" style="{style}" />'
+
 
 
 
