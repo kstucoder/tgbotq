@@ -102,15 +102,19 @@ def latex_to_img_tag(tex: str, block: bool = False) -> str:
 def replace_latex_with_images(text: str) -> str:
     """
     Matndagi \[ ... \] va \( ... \) LaTeX formulalarni <img> rasm bilan almashtiradi.
-    Hammasi data:image/...;base64,... tarzida bo'ladi.
+    \[ ... \] formulalar har doim alohida qatorda tursin.
     """
 
     def _block_sub(m: re.Match) -> str:
-        return latex_to_img_tag(m.group(1), block=True)
+        # Oldidagi va keyingisidagi matndan ajratish uchun newlinelar qo‘shamiz
+        img = latex_to_img_tag(m.group(1), block=True)
+        return f"\n{img}\n"
 
     def _inline_sub(m: re.Match) -> str:
+        # Inline formulalar matn orasida qoladi
         return latex_to_img_tag(m.group(1), block=False)
 
     text = LATEX_BLOCK_RE.sub(_block_sub, text)
     text = LATEX_INLINE_RE.sub(_inline_sub, text)
     return text
+
