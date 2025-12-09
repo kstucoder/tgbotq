@@ -64,13 +64,18 @@ def url_to_img_tag(
 
 def latex_to_data_url(tex: str, dpi: int = 150) -> str:
     """
-    LaTeX matndan codecogs orqali PNG olib, data URL (base64) qaytaradi.
-    (Online faqat serverda – foydalanuvchi Word'ni offline ochadi.)
+    LaTeX matndan codecogs orqali PNG olib, data URL qaytaradi.
+    Fonni maxsus ravishda OQ qilib qo'yamiz (bg_white),
+    shunda Word'da qora bo'lib ko'rinmaydi.
     """
     cleaned = " ".join(tex.strip().split())
     encoded = quote(cleaned)
-    src_url = f"https://latex.codecogs.com/png.image?\\dpi{{{dpi}}} {encoded}"
+
+    # bg_white qo'shdik – fon oq bo'ladi
+    src_url = f"https://latex.codecogs.com/png.image?\\dpi{{{dpi}}}\\bg_white {encoded}"
+
     return url_to_data_img_src(src_url)
+
 
 
 def latex_to_img_tag(tex: str, block: bool = False) -> str:
