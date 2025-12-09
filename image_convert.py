@@ -85,18 +85,23 @@ def latex_to_img_tag(tex: str, block: bool = False) -> str:
     block=True bo'lsa, formulani alohida qator (markazda),
     block=False bo'lsa, matn ichida inline ko'rinishda beradi.
     """
-    # LaTeX'dagi ortiqcha probel va newlinelarni qisqartiramiz
     cleaned = " ".join(tex.strip().split())
-
-    # Oldindan yozilgan helper: codecogs PNG URL -> data:image/...;base64,...
     data_src = latex_to_data_url(cleaned, dpi=150)
 
     if block:
-        style = "display:block; margin:12px auto; vertical-align:middle;"
+        # ALOHIDA QATORDA VA MARKAZDA
+        return (
+            '<p style="text-align:center; text-indent:0; margin:12px 0;">'
+            f'<img src="{data_src}" style="vertical-align:middle;" />'
+            '</p>'
+        )
     else:
-        style = "display:inline-block; margin:0 2px; vertical-align:middle;"
+        # MATN ICHIDA INLINE
+        return (
+            f'<img src="{data_src}" '
+            'style="display:inline-block; margin:0 2px; vertical-align:middle;" />'
+        )
 
-    return f'<img src="{data_src}" style="{style}" />'
 
 
 
