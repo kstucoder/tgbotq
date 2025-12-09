@@ -5,9 +5,9 @@ import asyncio
 import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional
-import requests  # AI image uchun HTTP chaqiriq (agar image_ai ichiga ko‘chirmoqchi bo‘lmasangiz)
 
 from image_ai import inject_ai_images_into_content
+from image_convert import replace_latex_with_images, url_to_data_img_src, url_to_img_tag
 
 
 from dotenv import load_dotenv
@@ -128,43 +128,7 @@ CREATE TABLE IF NOT EXISTS users (
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
-from urllib.parse import quote
 
-LATEX_BLOCK_RE = re.compile(r"\\\[(.+?)\\\]", re.DOTALL)
-LATEX_INLINE_RE = re.compile(r"\\\((.+?)\\\)")
-
-def latex_to_img_tag(tex: str) -> str:
-    """
-    LaTeX matnni codecogs asosidagi PNG rasmga aylantiruvchi <img> teg.
-    (Word HTML ichida ishlaydi)
-    """
-    # Ortiqcha probel va newlinelarni qisqartiramiz
-    cleaned = " ".join(tex.strip().split())
-    encoded = quote(cleaned)
-    # dpi=150 – sifati yaxshiroq bo‘lishi uchun
-    src = f"https://latex.codecogs.com/png.image?\\dpi{{150}} {encoded}"
-    return f"<img src=\"{src}\" style=\"vertical-align:middle;\" />"
-
-
-def replace_latex_with_images(text: str) -> str:
-    """
-    Matndagi LaTeX formulalarni (<img>) rasm bilan almashtiradi.
-    """
-    # Blok formulalar: \[ ... \]
-    def _block_sub(m: re.Match) -> str:
-        img = latex_to_img_tag(m.group(1))
-        # Markazga tekislab, alohida paragrafga qo'yamiz
-        return f"\n<p style=\"text-align:center; text-indent:0;\">{img}</p>\n"
-
-    text = LATEX_BLOCK_RE.sub(_block_sub, text)
-
-    # Inline formulalar: \( ... \)
-    def _inline_sub(m: re.Match) -> str:
-        img = latex_to_img_tag(m.group(1))
-        return img
-
-    text = LATEX_INLINE_RE.sub(_inline_sub, text)
-    return text
 
 CAPTION_KEY_PATTERN = re.compile(
     r"^\s*(TITLE|CATEGORY|TAGS|PRICE|DESCRIPTION)\s*:\s*(.+)$",
