@@ -5,6 +5,7 @@ import re
 import time
 import logging
 import requests
+from image_convert import url_to_img_tag
 
 log = logging.getLogger(__name__)
 
@@ -199,10 +200,16 @@ def inject_ai_images_into_content(raw: str) -> str:
         # DeAPI orqali rasm URL (faqat http/https bo'lsa qaytadi,
         # aks holda placeholder URL bo'ladi)
         img_url = generate_image_url_from_prompt(desc)
+                # 2) URL'ni offline <img> ga aylantiramiz (data:image/...;base64,...)
+        img_html = url_to_img_tag(
+            img_url,
+            inline=False,                # alohida blok sifatida
+            max_width="14cm",            # A4 Word uchun qulay
+        )
 
         html_block = f"""
         <div class="image-container" style="text-align:center; margin:16px 0;">
-          <img src="{img_url}" alt="Rasm {index}" style="max-width:14cm; height:auto;" />
+          {img_html}
           <p class="image-caption" style="font-size:12pt; margin-top:4px; text-align:center; text-indent:0;">
             Rasm {index}. {desc}
           </p>
