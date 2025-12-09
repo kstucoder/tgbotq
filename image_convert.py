@@ -3,6 +3,7 @@ import base64
 import logging
 import re
 from urllib.parse import quote
+from urllib.parse import quote_plus
 
 import requests
 
@@ -72,18 +73,19 @@ def latex_to_data_url(tex: str, dpi: int = 150) -> str:
     return url_to_data_img_src(src_url)
 
 
-def latex_to_img_tag(tex: str, block: bool = False) -> str:
+def latex_to_img_tag(tex: str) -> str:
     """
-    LaTeX matnni <img> tegiga aylantiradi.
-    block=True bo'lsa, alohida markazga tekislangan <p> ichida qaytaradi.
+    LaTeX matnni CodeCogs asosidagi PNG rasmga aylantiruvchi <img> teg.
+    (Word HTML ichida ishlaydi)
     """
-    data_src = latex_to_data_url(tex)
-    img = f'<img src="{data_src}" style="vertical-align:middle;" />'
+    # Ortiqcha probel va newlinelarni qisqartiramiz
+    cleaned = " ".join(tex.strip().split())
+    # CodeCogs uchun URL encoding (bo'shliqlarni + ga aylantiradi)
+    encoded = quote_plus(cleaned)
+    # Klassik endpoint: png.latex – fon oq, matn qora
+    src = f"https://latex.codecogs.com/png.latex?\\dpi{{150}} {encoded}"
+    return f'<img src="{src}" style="vertical-align:middle;" />'
 
-    if not block:
-        return img
-
-    return f'\n<p style="text-align:center; text-indent:0;">{img}</p>\n'
 
 
 def replace_latex_with_images(text: str) -> str:
