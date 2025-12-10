@@ -91,20 +91,19 @@ def latex_to_img_tag(tex: str, block: bool = False) -> str:
     if block:
         # ALOHIDA QATORDA VA MARKAZDA
         return (
-            '<p style="text-align:center; text-indent:0; margin:12px 0;">'
-            f'<img src="{data_src}" style="vertical-align:middle;" />'
+            '<p style="text-align:center; text-indent:0; margin:12px 0;'
+            ' mso-no-proof:yes; text-decoration:none; border:0;">'
+            f'<img src="{data_src}" style="vertical-align:middle; border:0;" />'
             '</p>'
         )
     else:
-        # MATN ICHIDA INLINE
+        # MATN ICHIDA INLINE (underline va boshqa formatlardan himoyalangan)
         return (
+            '<span style="text-decoration:none; border:0; mso-no-proof:yes;">'
             f'<img src="{data_src}" '
-            'style="display:inline-block; margin:0 2px; vertical-align:middle;" />'
+            'style="display:inline-block; margin:0 2px; vertical-align:middle; border:0;" />'
+            '</span>'
         )
-
-
-
-
 
 
 def replace_latex_with_images(text: str) -> str:
@@ -114,15 +113,17 @@ def replace_latex_with_images(text: str) -> str:
     """
 
     def _block_sub(m: re.Match) -> str:
-        # Oldidagi va keyingisidagi matndan ajratish uchun newlinelar qo‘shamiz
         img = latex_to_img_tag(m.group(1), block=True)
+        # oldi-keyinida bo'sh qatordan foydalanamiz
         return f"\n{img}\n"
 
     def _inline_sub(m: re.Match) -> str:
-        # Inline formulalar matn orasida qoladi
-        return latex_to_img_tag(m.group(1), block=False)
+        img = latex_to_img_tag(m.group(1), block=False)
+        # formuladan oldin va keyin bittadan probel
+        return f" {img} "
 
     text = LATEX_BLOCK_RE.sub(_block_sub, text)
     text = LATEX_INLINE_RE.sub(_inline_sub, text)
     return text
+
 
