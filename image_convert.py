@@ -1,321 +1,131 @@
-# image_ai.py
-
-import os
-import re
-import time
+# image_convert.py
+import base64
 import logging
-import requests
+import re
+from urllib.parse import quote
+from urllib.parse import quote_plus
 
-from image_convert import url_to_img_tag
+import requests
 
 log = logging.getLogger(__name__)
 
-# ================== DEAPI SOZLAMALARI ==================
-
-# DeAPI token (istasa .env dan olasiz, bo'lmasa fallback)
-DEAPI_TOKEN = os.getenv(
-    "DEAPI_TOKEN",
-    "797|Jd0EzXlxiOdLuMX1vcoC7Hth8u5ggWOeLKPutt7d48e73cbc",
-)
-
-DEAPI_BASE_URL = "https://api.deapi.ai/api/v1/client"
-PLACEHOLDER_URL = "https://via.placeholder.com/800x600.png?text=AI+Image"
-
-# ================== GROQ (UZ → EN TARJIMA UCHUN) ==================
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-# [RASM 1: ...] markerlarini topish uchun
-IMAGE_MARKER_RE = re.compile(r"\[RASM\s+(\d+):\s*([^\]]+)\]")
+# LaTeX patternlar (shu modul ichida)
+LATEX_BLOCK_RE = re.compile(r"\\\[(.+?)\\\]", re.DOTALL)
+LATEX_INLINE_RE = re.compile(r"\\\((.+?)\\\)")
 
 
-def _is_http_url(value: str | None) -> bool:
+def url_to_data_img_src(url: str, timeout: int = 20) -> str:
     """
-    Faqat http/https URL ekanligini tekshiradigan yordamchi.
-    Base64, bo'sh satr va boshqalarni rad etadi.
+    Oddiy rasm URL'ini yuklab, data:image/...;base64,... ko'rinishiga o'tkazadi.
+    Word/PDF/offline holatda ham ishlaydi.
     """
-    if not value:
-        return False
-    v = value.strip().lower()
-    return v.startswith("http://") or v.startswith("https://")
-
-
-def _translate_uz_to_en(text: str) -> str:
-    """
-    Groq API orqali o'zbek tilidagi tavsifni inglizcha qisqa
-    image-promptga tarjima qiladi.
-
-    Xatolik bo'lsa yoki GROQ_API_KEY yo'q bo'lsa, original matn qaytadi.
-    """
-    if not text or not text.strip():
-        return text
-
-    if not GROQ_API_KEY:
-        log.warning("GROQ_API_KEY topilmadi, DeAPI uchun original o'zbek matn ishlatiladi")
-        return text
-
-    payload = {
-        "model": "openai/gpt-oss-120b",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a professional translator. "
-                    "Translate the user's sentence from Uzbek into concise English, "
-                    "suitable as an image generation prompt. "
-                    "Return ONLY the English translation, no quotes, no explanations."
-                ),
-            },
-            {
-                "role": "user",
-                "content": text,
-            },
-        ],
-        "temperature": 0.3,
-        "max_tokens": 256,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
     try:
-        resp = requests.post(GROQ_API_URL, json=payload, headers=headers, timeout=30)
+        resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-        en = content.strip()
-        if not en:
-            log.warning("Groq javobida bo'sh content, original matn qaytarilmoqda")
-            return text
-        return en
+        img_bytes = resp.content
+
+        mime = resp.headers.get("Content-Type") or "image/png"
+        # Ba'zida Content-Type bo'sh yoki text/html bo'lishi mumkin,
+        # lekin Word baribir rasm sifatida o'qiydi, shuning uchun shu qiymatni ishlatamiz.
+        b64 = base64.b64encode(img_bytes).decode("ascii")
+        return f"data:{mime};base64,{b64}"
     except Exception as e:
-        log.error("Uz->En translation error: %s", e)
-        return text
+        log.error(f"url_to_data_img_src: '{url}' ni data URL ga aylantirishda xatolik: {e}")
+        # Agar yuklab bo'lmasa, hech bo'lmasa original URL qaytariladi (online ishlaydi)
+        return url
 
 
-def _deapi_txt2img_request(prompt: str) -> str | None:
+def url_to_img_tag(
+    url: str,
+    inline: bool = True,
+    max_width: str = "100%",
+    extra_style: str = "",
+) -> str:
     """
-    DeAPI txt2img:
-    - POST /txt2img => request_id olamiz
+    Berilgan URL (masalan, AI rasm) dan <img> tegini yasaydi,
+    lekin src ichiga data:image/...;base64,... qo'yadi.
     """
-    if not DEAPI_TOKEN:
-        log.warning("DEAPI_TOKEN topilmadi, DeAPI ishlatilmaydi")
-        return None
+    data_src = url_to_data_img_src(url)
 
-    txt2img_url = f"{DEAPI_BASE_URL}/txt2img"
+    style_parts = []
+    if inline:
+        style_parts.append("vertical-align:middle;")
+    if max_width:
+        style_parts.append(f"max-width:{max_width}; height:auto;")
+    if extra_style:
+        style_parts.append(extra_style)
 
-    headers = {
-        "Authorization": f"Bearer {DEAPI_TOKEN}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
+    style_attr = ""
+    if style_parts:
+        style_attr = ' style="' + " ".join(style_parts) + '"'
 
-    payload = {
-        "prompt": prompt,
-        "negative_prompt": "blur, darkness, noise, low quality, artifacts, text, watermark",
-        "model": "Flux1schnell",
-        "loras": [],
-        "width": 512,
-        "height": 512,
-        "guidance": 7.5,
-        "steps": 8,
-        "seed": 42,
-    }
-
-    try:
-        log.debug("DeAPI txt2img so'rov yuborilmoqda...")
-        resp = requests.post(txt2img_url, headers=headers, json=payload, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        request_id = (data.get("data") or {}).get("request_id")
-        log.debug("DeAPI txt2img javobi request_id=%s", request_id)
-        if not request_id:
-            log.error("DeAPI javobida request_id topilmadi: %s", data)
-            return None
-        return request_id
-    except Exception as e:
-        log.exception("DeAPI txt2img error: %s", e)
-        return None
+    return f'<img src="{data_src}"{style_attr} />'
 
 
-def _deapi_poll_result(
-    request_id: str,
-    max_attempts: int = 12,
-    interval_sec: int = 3,
-) -> str | None:
+def latex_to_data_url(tex: str, dpi: int = 150) -> str:
     """
-    - GET /request-status/{request_id} ni bir necha marta tekshiradi
-    - faqat HTTP(S) URL bo'lgan result_url/result/preview maydonidan rasm URL qaytaradi
+    LaTeX matndan codecogs orqali PNG olib, data URL qaytaradi.
+    Fonni maxsus ravishda OQ qilib qo'yamiz (bg_white),
+    shunda Word'da qora bo'lib ko'rinmaydi.
     """
-    if not DEAPI_TOKEN:
-        return None
+    cleaned = " ".join(tex.strip().split())
+    encoded = quote(cleaned)
 
-    status_url = f"{DEAPI_BASE_URL}/request-status/{request_id}"
-    headers = {
-        "Authorization": f"Bearer {DEAPI_TOKEN}",
-        "Accept": "application/json",
-    }
+    # bg_white qo'shdik – fon oq bo'ladi
+    src_url = f"https://latex.codecogs.com/png.image?\\dpi{{{dpi}}}\\bg_white {encoded}"
 
-    for attempt in range(max_attempts):
-        try:
-            log.debug("DeAPI status tekshirilmoqda: attempt=%s", attempt + 1)
-            resp = requests.get(status_url, headers=headers, timeout=30)
-            resp.raise_for_status()
-            sdata = resp.json()
-            d = sdata.get("data") or {}
-            status = d.get("status")
-            log.info("DeAPI status: %s (request_id=%s)", status, request_id)
-
-            result_url = d.get("result_url") or d.get("result") or d.get("preview")
-            if _is_http_url(result_url):
-                log.info("Rasm URL topildi: %s", result_url)
-                return result_url
-
-            if result_url and not _is_http_url(result_url):
-                log.warning(
-                    "DeAPI natija HTTP URL emas (ehtimol base64 yoki boshqacha): %s...",
-                    str(result_url)[:80],
-                )
-
-            if status in ("pending", "processing", "queued", "running"):
-                time.sleep(interval_sec)
-                continue
-
-            log.warning("DeAPI status kutilmagan: %s, data=%s", status, sdata)
-            return None
-
-        except Exception as e:
-            log.exception("DeAPI status tekshirishda xato: %s", e)
-            return None
-
-    log.error(
-        "DeAPI timeout: %s urinishdan keyin ham URL natija yo'q (request_id=%s)",
-        max_attempts,
-        request_id,
-    )
-    return None
+    return url_to_data_img_src(src_url)
 
 
-def generate_image_url_from_prompt(prompt: str) -> str:
+
+def latex_to_img_tag(tex: str, block: bool = False) -> str:
     """
-    - DeAPI orqali rasm yaratishga urinadi (bir necha marta)
-    - Hammasi joyida bo'lsa, HTTP(S) rasm URL qaytaradi
-    - Aks holda placeholder URL qaytaradi
+    LaTeX matnni CodeCogs asosidagi PNG rasmga aylantiruvchi <img> teg.
+    Rasm SRC ichiga data:image/...;base64,... qo'yiladi, shuning uchun WORD OFFLINE ishlaydi.
+    block=True bo'lsa, formulani alohida qator (markazda),
+    block=False bo'lsa, matn ichida inline ko'rinishda beradi.
     """
-    if not DEAPI_TOKEN:
-        log.warning("DEAPI_TOKEN yo'q, placeholder URL qaytaryapman")
-        return PLACEHOLDER_URL
+    cleaned = " ".join(tex.strip().split())
+    data_src = latex_to_data_url(cleaned, dpi=150)
 
-    MAX_JOBS = 5  # nechta yangi txt2img job yaratib ko'ramiz
-
-    for job_attempt in range(1, MAX_JOBS + 1):
-        log.info("DeAPI txt2img urinish #%s, prompt=%s", job_attempt, prompt)
-
-        request_id = _deapi_txt2img_request(prompt)
-        if not request_id:
-            log.warning("txt2img request_id olinmadi (urinish #%s)", job_attempt)
-            continue
-
-        img_url = _deapi_poll_result(request_id)
-        if _is_http_url(img_url):
-            return img_url
-
-        log.warning(
-            "DeAPI urinish #%s da ham toza URL olinmadi (img_url=%s). Keyingi urinishga o'taman.",
-            job_attempt,
-            (img_url or "")[:80],
+    if block:
+        # ALOHIDA QATORDA VA MARKAZDA
+        return (
+            '<p style="text-align:center; text-indent:0; margin:12px 0; '
+            'mso-no-proof:yes; mso-bidi-font-weight:normal; '
+            'text-decoration:none; font-weight:normal;">'
+            f'<img src="{data_src}" style="border:0; margin:auto; display:block;" />'
+            '</p>'
+        )
+    else:
+        # MATN ICHIDA INLINE (underline va boshqa formatlardan himoyalangan)
+        return (
+            '<span style="text-decoration:none; mso-no-proof:yes; '
+            'mso-bidi-font-weight:normal; font-weight:normal;">'
+            f'<img src="{data_src}" style="border:0; vertical-align:middle;" />'
+            '</span>'
         )
 
-    log.error(
-        "DeAPI orqali %s marta urinilgandan keyin ham HTTP URL olinmadi. Placeholder qaytaryapman.",
-        MAX_JOBS,
-    )
-    return PLACEHOLDER_URL
 
 
-def inject_ai_images_into_content(raw: str) -> str:
+def replace_latex_with_images(text: str) -> str:
     """
-    Matndagi [RASM n: ...] markerlarni AI yordamida yaratilgan
-    rasm <img> bloklariga almashtiradi.
-
-    Misol marker:
-      [RASM 1: Sun'iy intellekt asosida ishlovchi datchiklar tizimi]
-
-    Natija (Word HTML ichida):
-      <div class="image-container">
-        <img src="data:image/...;base64,..." ... />
-        <p>Rasm 1. Sun'iy intellekt asosida ...</p>
-      </div>
-
-    DeAPI uchun inglizcha prompt Groq orqali avtomatik tarjima qilinadi,
-    lekin Word ichidagi izoh o'zbekcha qoladi.
+    Matndagi \[ ... \] va \( ... \) LaTeX formulalarni <img> rasm bilan almashtiradi.
+    \[ ... \] formulalar har doim alohida qatorda tursin.
     """
-    if not raw:
-        return ""
 
-    text = raw
+    def _block_sub(m: re.Match) -> str:
+        img = latex_to_img_tag(m.group(1), block=True)
+        # oldi-keyinida bo'sh qatordan foydalanamiz
+        return f"\n{img}\n"
 
-    def _replace(match: re.Match) -> str:
-        index = match.group(1)
-        desc_uz = match.group(2).strip()
-
-        # 1) O'zbek tavsifni ingliz tiliga tarjima qilamiz (Groq orqali)
-        desc_en = _translate_uz_to_en(desc_uz)
-
-        # 2) DeAPI uchun maxsus inglizcha prompt
-        prompt = (
-            "High-quality minimalist scientific infographic on white background, "
-            "no people, no faces, no realistic photos. "
-            f"Topic: {desc_en}. "
-            "Vector-style diagram or block-scheme with clear labels, arrows and data flow."
-        )
-
-        # 3) DeAPI orqali rasm URL (http/https yoki placeholder)
-        img_url = generate_image_url_from_prompt(prompt)
-
-        # 4) URL'ni offline <img> ga aylantiramiz (data:image/...;base64,...) – Word/PDF uchun
-        img_html = url_to_img_tag(
-            img_url,
-            inline=False,      # alohida blok sifatida
-            max_width="14cm",  # A4 Word uchun qulay
-        )
-
-        # 5) Matnda esa O'ZBEKCHA ta'rif qoladi
-        html_block = f"""
-        <div class="image-container" style="text-align:center; margin:16px 0;">
-          {img_html}
-          <p class="image-caption" style="font-size:12pt; margin-top:4px; text-align:center; text-indent:0;">
-            Rasm {index}. {desc_uz}
-          </p>
-        </div>
-        """
-        return html_block
-
-    text = IMAGE_MARKER_RE.sub(_replace, text)
+    def _inline_sub(m: re.Match) -> str:
+        img = latex_to_img_tag(m.group(1), block=False)
+        # formuladan oldin va keyin bittadan probel
+        return f" {img} "
+    text = re.sub(r"\n{2,}", "\n", text)
+    text = LATEX_BLOCK_RE.sub(_block_sub, text)
+    text = LATEX_INLINE_RE.sub(_inline_sub, text)
     return text
 
 
-# Tezkor test uchun (istasa comment qilib qo'yasiz)
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    test_text = """
-    Bu oddiy matn.
-
-    [RASM 1: Quyosh panellarining samaradorligi va energiya oqimlari bo‘yicha ilmiy diagramma]
-
-    Matn davom etadi.
-
-    [RASM 2: Sunʼiy intellekt asosida maʼlumotlarni yigʻish, qayta ishlash va prognozlash blok-sxemasi]
-    """
-
-    print("=== Kirish matni ===")
-    print(test_text)
-
-    out = inject_ai_images_into_content(test_text)
-
-    print("\n=== Chiqish (HTML) ===")
-    print(out)
