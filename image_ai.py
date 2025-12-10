@@ -5,15 +5,26 @@ import re
 import time
 import logging
 import requests
+
 from image_convert import url_to_img_tag
 
 log = logging.getLogger(__name__)
 
-# DEAPI tokenni .env ichida DEAPI_TOKEN sifatida saqlaysiz
-DEAPI_TOKEN = "797|Jd0EzXlxiOdLuMX1vcoC7Hth8u5ggWOeLKPutt7d48e73cbc"
+# ================== DEAPI SOZLAMALARI ==================
+
+# DeAPI token (istasa .env dan olasiz, bo'lmasa fallback)
+DEAPI_TOKEN = os.getenv(
+    "DEAPI_TOKEN",
+    "797|Jd0EzXlxiOdLuMX1vcoC7Hth8u5ggWOeLKPutt7d48e73cbc",
+)
 
 DEAPI_BASE_URL = "https://api.deapi.ai/api/v1/client"
 PLACEHOLDER_URL = "https://via.placeholder.com/800x600.png?text=AI+Image"
+
+# ================== GROQ (UZ → EN TARJIMA UCHUN) ==================
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # [RASM 1: ...] markerlarini topish uchun
 IMAGE_MARKER_RE = re.compile(r"\[RASM\s+(\d+):\s*([^\]]+)\]")
@@ -22,7 +33,7 @@ IMAGE_MARKER_RE = re.compile(r"\[RASM\s+(\d+):\s*([^\]]+)\]")
 def _is_http_url(value: str | None) -> bool:
     """
     Faqat http/https URL ekanligini tekshiradigan yordamchi.
-    Base64, bo'sh satr va boshqalarni rad etamiz.
+    Base64, bo'sh satr va boshqalarni rad etadi.
     """
     if not value:
         return False
@@ -30,13 +41,68 @@ def _is_http_url(value: str | None) -> bool:
     return v.startswith("http://") or v.startswith("https://")
 
 
+def _translate_uz_to_en(text: str) -> str:
+    """
+    Groq API orqali o'zbek tilidagi tavsifni inglizcha qisqa
+    image-promptga tarjima qiladi.
+
+    Xatolik bo'lsa yoki GROQ_API_KEY yo'q bo'lsa, original matn qaytadi.
+    """
+    if not text or not text.strip():
+        return text
+
+    if not GROQ_API_KEY:
+        log.warning("GROQ_API_KEY topilmadi, DeAPI uchun original o'zbek matn ishlatiladi")
+        return text
+
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a professional translator. "
+                    "Translate the user's sentence from Uzbek into concise English, "
+                    "suitable as an image generation prompt. "
+                    "Return ONLY the English translation, no quotes, no explanations."
+                ),
+            },
+            {
+                "role": "user",
+                "content": text,
+            },
+        ],
+        "temperature": 0.3,
+        "max_tokens": 256,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.post(GROQ_API_URL, json=payload, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        en = content.strip()
+        if not en:
+            log.warning("Groq javobida bo'sh content, original matn qaytarilmoqda")
+            return text
+        return en
+    except Exception as e:
+        log.error("Uz->En translation error: %s", e)
+        return text
+
+
 def _deapi_txt2img_request(prompt: str) -> str | None:
     """
-    Botdagi ishlayotgan logika asosida:
+    DeAPI txt2img:
     - POST /txt2img => request_id olamiz
     """
     if not DEAPI_TOKEN:
-        log.warning("DEAPI_TOKEN topilmadi, placeholder ishlatiladi")
+        log.warning("DEAPI_TOKEN topilmadi, DeAPI ishlatilmaydi")
         return None
 
     txt2img_url = f"{DEAPI_BASE_URL}/txt2img"
@@ -51,11 +117,11 @@ def _deapi_txt2img_request(prompt: str) -> str | None:
         "prompt": prompt,
         "negative_prompt": "blur, darkness, noise, low quality, artifacts, text, watermark",
         "model": "Flux1schnell",
-        "loras": [],          # muammo bo‘lmasligi uchun bo‘sh
+        "loras": [],
         "width": 512,
         "height": 512,
         "guidance": 7.5,
-        "steps": 8,           # 10 dan oshmasin
+        "steps": 8,
         "seed": 42,
     }
 
@@ -75,9 +141,12 @@ def _deapi_txt2img_request(prompt: str) -> str | None:
         return None
 
 
-def _deapi_poll_result(request_id: str, max_attempts: int = 12, interval_sec: int = 3) -> str | None:
+def _deapi_poll_result(
+    request_id: str,
+    max_attempts: int = 12,
+    interval_sec: int = 3,
+) -> str | None:
     """
-    Botdagi uslub bilan:
     - GET /request-status/{request_id} ni bir necha marta tekshiradi
     - faqat HTTP(S) URL bo'lgan result_url/result/preview maydonidan rasm URL qaytaradi
     """
@@ -100,25 +169,21 @@ def _deapi_poll_result(request_id: str, max_attempts: int = 12, interval_sec: in
             status = d.get("status")
             log.info("DeAPI status: %s (request_id=%s)", status, request_id)
 
-            # Muvaffaqiyatli bo'lsa - URL izlaymiz
             result_url = d.get("result_url") or d.get("result") or d.get("preview")
             if _is_http_url(result_url):
                 log.info("Rasm URL topildi: %s", result_url)
                 return result_url
 
-            # Agar result boru, lekin URL emas bo'lsa - log yozib, davom etamiz
             if result_url and not _is_http_url(result_url):
                 log.warning(
                     "DeAPI natija HTTP URL emas (ehtimol base64 yoki boshqacha): %s...",
                     str(result_url)[:80],
                 )
 
-            # Hali ishlayapti
             if status in ("pending", "processing", "queued", "running"):
                 time.sleep(interval_sec)
                 continue
 
-            # Kutilmagan status
             log.warning("DeAPI status kutilmagan: %s, data=%s", status, sdata)
             return None
 
@@ -126,18 +191,19 @@ def _deapi_poll_result(request_id: str, max_attempts: int = 12, interval_sec: in
             log.exception("DeAPI status tekshirishda xato: %s", e)
             return None
 
-    log.error("DeAPI timeout: %s urinishdan keyin ham URL natija yo'q (request_id=%s)", max_attempts, request_id)
+    log.error(
+        "DeAPI timeout: %s urinishdan keyin ham URL natija yo'q (request_id=%s)",
+        max_attempts,
+        request_id,
+    )
     return None
 
 
 def generate_image_url_from_prompt(prompt: str) -> str:
     """
-    Referat/Word tomoni shu funksiyani chaqiradi.
-    - deapi orqali rasm yaratishga urinadi
-    - agar hammasi joyida bo'lsa, AI rasm URL (http/https) qaytaradi
-    - xatolik/timeout yoki URL bo'lmasa, placeholder rasm URL qaytaradi
-
-    MUHIM: Doim URL olmaguncha bir necha marta urinadi (MAX_JOBS marta).
+    - DeAPI orqali rasm yaratishga urinadi (bir necha marta)
+    - Hammasi joyida bo'lsa, HTTP(S) rasm URL qaytaradi
+    - Aks holda placeholder URL qaytaradi
     """
     if not DEAPI_TOKEN:
         log.warning("DEAPI_TOKEN yo'q, placeholder URL qaytaryapman")
@@ -148,16 +214,13 @@ def generate_image_url_from_prompt(prompt: str) -> str:
     for job_attempt in range(1, MAX_JOBS + 1):
         log.info("DeAPI txt2img urinish #%s, prompt=%s", job_attempt, prompt)
 
-        # 1) job yaratamiz
         request_id = _deapi_txt2img_request(prompt)
         if not request_id:
             log.warning("txt2img request_id olinmadi (urinish #%s)", job_attempt)
             continue
 
-        # 2) natijani poll qilamiz
         img_url = _deapi_poll_result(request_id)
         if _is_http_url(img_url):
-            # Faqat URL bo'lsa qaytaramiz
             return img_url
 
         log.warning(
@@ -166,7 +229,6 @@ def generate_image_url_from_prompt(prompt: str) -> str:
             (img_url or "")[:80],
         )
 
-    # Hamma urinishlar ishlamasa - xavfsiz fallback
     log.error(
         "DeAPI orqali %s marta urinilgandan keyin ham HTTP URL olinmadi. Placeholder qaytaryapman.",
         MAX_JOBS,
@@ -184,9 +246,12 @@ def inject_ai_images_into_content(raw: str) -> str:
 
     Natija (Word HTML ichida):
       <div class="image-container">
-        <img src="https://..." ... />
+        <img src="data:image/...;base64,..." ... />
         <p>Rasm 1. Sun'iy intellekt asosida ...</p>
       </div>
+
+    DeAPI uchun inglizcha prompt Groq orqali avtomatik tarjima qilinadi,
+    lekin Word ichidagi izoh o'zbekcha qoladi.
     """
     if not raw:
         return ""
@@ -195,23 +260,35 @@ def inject_ai_images_into_content(raw: str) -> str:
 
     def _replace(match: re.Match) -> str:
         index = match.group(1)
-        desc = match.group(2).strip()
+        desc_uz = match.group(2).strip()
 
-        # DeAPI orqali rasm URL (faqat http/https bo'lsa qaytadi,
-        # aks holda placeholder URL bo'ladi)
-        img_url = generate_image_url_from_prompt(desc)
-                # 2) URL'ni offline <img> ga aylantiramiz (data:image/...;base64,...)
-        img_html = url_to_img_tag(
-            img_url,
-            inline=False,                # alohida blok sifatida
-            max_width="14cm",            # A4 Word uchun qulay
+        # 1) O'zbek tavsifni ingliz tiliga tarjima qilamiz (Groq orqali)
+        desc_en = _translate_uz_to_en(desc_uz)
+
+        # 2) DeAPI uchun maxsus inglizcha prompt
+        prompt = (
+            "High-quality minimalist scientific infographic on white background, "
+            "no people, no faces, no realistic photos. "
+            f"Topic: {desc_en}. "
+            "Vector-style diagram or block-scheme with clear labels, arrows and data flow."
         )
 
+        # 3) DeAPI orqali rasm URL (http/https yoki placeholder)
+        img_url = generate_image_url_from_prompt(prompt)
+
+        # 4) URL'ni offline <img> ga aylantiramiz (data:image/...;base64,...) – Word/PDF uchun
+        img_html = url_to_img_tag(
+            img_url,
+            inline=False,      # alohida blok sifatida
+            max_width="14cm",  # A4 Word uchun qulay
+        )
+
+        # 5) Matnda esa O'ZBEKCHA ta'rif qoladi
         html_block = f"""
         <div class="image-container" style="text-align:center; margin:16px 0;">
           {img_html}
           <p class="image-caption" style="font-size:12pt; margin-top:4px; text-align:center; text-indent:0;">
-            Rasm {index}. {desc}
+            Rasm {index}. {desc_uz}
           </p>
         </div>
         """
@@ -221,18 +298,18 @@ def inject_ai_images_into_content(raw: str) -> str:
     return text
 
 
-# Quyidagini faqat tezkor test uchun ishlatishingiz mumkin:
+# Tezkor test uchun (istasa comment qilib qo'yasiz)
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     test_text = """
     Bu oddiy matn.
 
-    [RASM 1: A realistic illustration of a university student presenting a project with slides in a classroom]
+    [RASM 1: Quyosh panellarining samaradorligi va energiya oqimlari bo‘yicha ilmiy diagramma]
 
     Matn davom etadi.
 
-    [RASM 2: Detailed infographic style diagram about artificial intelligence and data flow]
+    [RASM 2: Sunʼiy intellekt asosida maʼlumotlarni yigʻish, qayta ishlash va prognozlash blok-sxemasi]
     """
 
     print("=== Kirish matni ===")
