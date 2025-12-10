@@ -91,8 +91,8 @@ def latex_to_img_tag(tex: str, block: bool = False) -> str:
     if block:
         # ALOHIDA QATORDA VA MARKAZDA
         return (
-            '<p style="text-align:center; text-indent:0; margin:12px 0;'
-            ' mso-no-proof:yes; mso-bidi-font-weight:normal;">'
+            '<p style="text-align:center; text-indent:0; margin:12px 0; '
+            'mso-no-proof:yes; mso-bidi-font-weight:normal; '
             'text-decoration:none; font-weight:normal;">'
             f'<img src="{data_src}" style="border:0; margin:auto; display:block;" />'
             '</p>'
@@ -100,11 +100,12 @@ def latex_to_img_tag(tex: str, block: bool = False) -> str:
     else:
         # MATN ICHIDA INLINE (underline va boshqa formatlardan himoyalangan)
         return (
-            '<span style="text-decoration:none; mso-no-proof:yes;">'
+            '<span style="text-decoration:none; mso-no-proof:yes; '
             'mso-bidi-font-weight:normal; font-weight:normal;">'
             f'<img src="{data_src}" style="border:0; vertical-align:middle;" />'
             '</span>'
         )
+
 
 
 def replace_latex_with_images(text: str) -> str:
