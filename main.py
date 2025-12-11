@@ -1836,8 +1836,11 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         }}
         p {{
           text-indent:1.25cm;
-          margin-bottom:0.3cm;
+          margin-top:0;
+          margin-bottom:0;
+          line-height:1.15;
         }}
+
         table {{
           border-collapse:collapse;
         }}
