@@ -1832,21 +1832,24 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         body {{
           font-family:'Times New Roman';
           font-size:14pt;
-          line-height:1.5;
+          line-height:150%;
           text-align:justify;
+          mso-line-height-rule:exactly;
         }}
         p {{
           text-indent:1.25cm;
           margin-top:0;
           margin-bottom:0;
-          line-height:1.5;
+          line-height:150%;
+          mso-line-height-rule:exactly;  /* Word shuni ko‘radi */
         }}
 
         /* Titul sahifa uchun alohida qoidalar */
         .title-page p {{
           text-indent:0;
           text-align:center;
-          line-height:1.0;  /* Titulda 1.0, asosiy matnda 1.5 qoladi */
+          line-height:100%;  /* Titulda 1.0, asosiy matnda 1.5 qoladi */
+          mso-line-height-rule:exactly;
         }}
 
         table {{
