@@ -1838,7 +1838,7 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
           text-indent:1.25cm;
           margin-top:0;
           margin-bottom:0;
-          line-height:1.15;
+          line-height:1.5;
         }}
 
         table {{
@@ -2120,3 +2120,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("👋 Bot yakunlandi")
+
