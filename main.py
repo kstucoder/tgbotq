@@ -1727,7 +1727,8 @@ def build_title_page_html(topic: str, work_type_name: str, year: int | None = No
     t = TITLE_TEMPLATE
 
     return f"""
-    <div style="width:100%; text-align:center; line-height:1.5;">
+    <div class="title-page" style="width:100%; text-align:center;">
+
 
       <!-- Vazirlik nomi -->
       <p style="margin-top:40px; margin-bottom:0; text-align:center; text-indent:0; font-size:18pt; font-weight:bold; text-transform:uppercase;">
@@ -1841,6 +1842,13 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
           line-height:1.5;
         }}
 
+        /* Titul sahifa uchun alohida qoidalar */
+        .title-page p {{
+          text-indent:0;
+          text-align:center;
+          line-height:1.0;  /* Titulda 1.0, asosiy matnda 1.5 qoladi */
+        }}
+
         table {{
           border-collapse:collapse;
         }}
@@ -1875,6 +1883,8 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
           margin-bottom:0.2cm;
         }}
       </style>
+
+
     </head>
     <body>
       {title_html}
@@ -2120,4 +2130,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("👋 Bot yakunlandi")
-
