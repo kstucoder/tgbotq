@@ -2071,7 +2071,7 @@ async def handle_send_referat(request: web.Request):
                 )
                 
                 await bot.send_document(
-                    chat_id=ADMIN_CHAT_ID,
+                    chat_id=ADMIN_ORDERS_CHANNEL_ID,
                     document=admin_input_file,
                     caption=admin_caption[:1024],
                     parse_mode="HTML",
