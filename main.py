@@ -2049,7 +2049,7 @@ async def handle_send_referat(request: web.Request):
         )
 
         # 2) ✅ YANGI: Admin kanalga ham yuborish
-        if ADMIN_CHAT_ID:
+        if ADMIN_ORDERS_CHANNEL_ID:
             try:
                 # Faylni qayta yuklash (FSInputFile bir marta ishlatiladi)
                 admin_input_file = FSInputFile(file_path, filename=file_name)
