@@ -33,6 +33,8 @@ BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 PAYMENT_CARD = os.getenv("PAYMENT_CARD", "9860 **** **** 1234")
 DB_PATH = os.getenv("DB_PATH", "files_bot.db")
+ADMIN_ORDERS_CHANNEL_ID = int(os.getenv("ADMIN_ORDERS_CHANNEL_ID", "0"))
+
 
 RAW_FRONTEND_URL = os.getenv("FRONTEND_URL", "https://nurali-print.vercel.app")
 FRONTEND_URL = RAW_FRONTEND_URL.rstrip("/")  # hamma joyda shundan foydalanamiz
@@ -1998,7 +2000,9 @@ async def handle_send_referat(request: web.Request):
       "telegramUsername": "username_agar_bolsa",
       "topic": "Sun'iy intellekt ...",
       "workTypeName": "Referat",
-      "content": "butun referat matni..."
+      "content": "butun referat matni...",
+      "price": 4000,
+      "orderId": "abc123"
     }
     """
     try:
@@ -2011,9 +2015,12 @@ async def handle_send_referat(request: web.Request):
         return web.json_response({"ok": False, "error": "Unauthorized"}, status=403)
 
     telegram_user_id = data.get("telegramUserId") or data.get("telegram_user_id")
+    telegram_username = data.get("telegramUsername") or data.get("telegram_username")
     topic = data.get("topic")
     work_type_name = data.get("workTypeName") or data.get("work_type_name") or "Referat"
     content = data.get("content") or data.get("contentFull")
+    price = data.get("price") or 0
+    order_id = data.get("orderId") or data.get("order_id") or "N/A"
 
     if not telegram_user_id or not topic or not content:
         return web.json_response(
@@ -2031,16 +2038,51 @@ async def handle_send_referat(request: web.Request):
         file_path = build_word_doc_file(topic, work_type_name, content)
         file_name = os.path.basename(file_path)
 
+        # 1) Foydalanuvchiga yuborish
         input_file = FSInputFile(file_path, filename=file_name)
-        caption = f"{work_type_name} — {topic}"
+        user_caption = f"✅ {work_type_name} — {topic}"
 
         await bot.send_document(
             chat_id=chat_id,
             document=input_file,
-            caption=caption[:1024],
+            caption=user_caption[:1024],
         )
 
-        return web.json_response({"ok": True, "detail": "File sent via bot"})
+        # 2) ✅ YANGI: Admin kanalga ham yuborish
+        if ADMIN_CHAT_ID:
+            try:
+                # Faylni qayta yuklash (FSInputFile bir marta ishlatiladi)
+                admin_input_file = FSInputFile(file_path, filename=file_name)
+                
+                # Username bilan yoki ID bilan user info
+                if telegram_username:
+                    user_info = f"@{telegram_username} (<code>{telegram_user_id}</code>)"
+                else:
+                    user_info = f"<code>{telegram_user_id}</code>"
+                
+                admin_caption = (
+                    f"✅ <b>TASDIQLANGAN BUYURTMA</b>\n\n"
+                    f"🆔 <b>Order ID:</b> <code>{order_id}</code>\n"
+                    f"📄 <b>Ish turi:</b> {work_type_name}\n"
+                    f"📝 <b>Mavzu:</b> {topic}\n"
+                    f"💰 <b>Narxi:</b> {price:,} so'm\n"
+                    f"👤 <b>Foydalanuvchi:</b> {user_info}\n"
+                    f"⏰ <b>Vaqt:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                
+                await bot.send_document(
+                    chat_id=ADMIN_CHAT_ID,
+                    document=admin_input_file,
+                    caption=admin_caption[:1024],
+                    parse_mode="HTML",
+                )
+                log.info(f"✅ Admin kanalga ham yuborildi: order={order_id}")
+                
+            except Exception as admin_err:
+                log.error(f"Admin kanalga yuborishda xatolik: {admin_err}")
+                # Bu xatolik asosiy jarayonni to'xtatmasin
+
+        return web.json_response({"ok": True, "detail": "File sent to user and admin"})
 
     except Exception as e:
         log.error(f"/api/send_referat error: {e}", exc_info=True)
@@ -2051,7 +2093,7 @@ async def handle_send_referat(request: web.Request):
                 os.remove(file_path)
             except Exception:
                 pass
-
+    
 
 # ---------- Startup & Shutdown ----------
 
