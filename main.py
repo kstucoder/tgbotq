@@ -1592,6 +1592,48 @@ def clean_ai_content(raw: str) -> str:
 
     return text.strip()
 
+def generate_reja_from_content(content: str):
+    """
+    AI yaratgan matndan avtomatik REJA bo'limini chiqarib beradi.
+    1. Kirish
+    2. Asosiy qism
+    2.1., 2.2., 2.n kabi satrlarni aniqlaydi
+    3. Xulosa
+    4. Foydalanilgan adabiyotlar
+    """
+    lines = content.split("\n")
+    reja = []
+
+    # 1. Kirish
+    for l in lines:
+        if l.strip().lower().startswith("1. kirish"):
+            reja.append("1. Kirish")
+            break
+
+    # 2. Asosiy qism
+    for l in lines:
+        if l.strip().lower().startswith("2. asosiy"):
+            reja.append("2. Asosiy qism")
+            break
+
+    # 2.x.x bo‘limlarni yig‘ish
+    for l in lines:
+        if re.match(r"^2\.\d+\.\s+.+", l.strip()):
+            reja.append(l.strip())
+
+    # 3. Xulosa
+    for l in lines:
+        if l.strip().lower().startswith("3. xulosa"):
+            reja.append("3. Xulosa")
+            break
+
+    # 4. Foydalanilgan adabiyotlar
+    for l in lines:
+        if l.strip().lower().startswith("4. foydalanilgan"):
+            reja.append("4. Foydalanilgan adabiyotlar")
+            break
+
+    return reja
 
 def ai_content_to_html_paragraphs(content: str) -> str:
     """
@@ -1817,6 +1859,17 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
 
     # 3) Titul sahifani HTML ko‘rinishida olamiz
     title_html = build_title_page_html(topic=topic, work_type_name=work_type_name, year=year)
+        # 🔥  REJANI avtomatik yaratamiz
+    reja_items = generate_reja_from_content(with_images)
+
+    reja_html = """
+    <h2 style='text-align:center; font-size:16pt; font-weight:bold;'>REJA</h2>
+    """
+    for item in reja_items:
+        reja_html += f"<p style='text-indent:0;'>{item}</p>"
+
+    # Reja tugagandan keyin yangi sahifa
+    reja_html += "<br style='page-break-before:always;'>"
 
     # 4) Asosiy matnni HTML paragraflarga/jadvallarga aylantiramiz
     body_html = ai_content_to_html_paragraphs(with_images)
@@ -1893,6 +1946,7 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
     </head>
     <body>
       {title_html}
+      {reja_html}
       {body_html}
     </body>
     </html>
