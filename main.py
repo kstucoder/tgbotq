@@ -1652,11 +1652,11 @@ def generate_reja_from_content(content: str):
 
 def ai_content_to_html_paragraphs(content: str) -> str:
     """
-    Firebase’dan kelgan matnni Word uchun HTML'ga aylantiradi:
+    Firebase'dan kelgan matnni Word uchun HTML'ga aylantiradi:
     - **qalin** -> <strong>qalin</strong>
     - markdown jadval satrlarini | col1 | col2 | -> <table>...
     - 1. Kirish, 2. Asosiy qism, 3. Xulosa, 4. Foydalanilgan adabiyotlar sarlavhalarini alohida formatlaydi
-    - 4. Foydalanilgan adabiyotlar bo'limi alohida sahifadan boshlanadi
+    - 2. Asosiy qism, 3. Xulosa va 4. Foydalanilgan adabiyotlar bo'limlari alohida sahifadan boshlanadi
     """
     if not content:
         return ""
@@ -1707,7 +1707,7 @@ def ai_content_to_html_paragraphs(content: str) -> str:
             table_buffer.append(line)
             continue
 
-        # Jadval tugagan bo‘lishi mumkin
+        # Jadval tugagan bo'lishi mumkin
         if table_buffer:
             flush_table()
 
@@ -1716,30 +1716,36 @@ def ai_content_to_html_paragraphs(content: str) -> str:
             continue
 
         # === Asosiy bo'lim sarlavhalari ===
-        # 1. Kirish
+        
+        # 1. Kirish (birinchi sahifada qoladi - reja dan keyin)
         if re.match(r"^1\.\s*Kirish\s*$", stripped, flags=re.IGNORECASE):
             html_blocks.append(
                 '<p class="section-title-main">1. Kirish</p>'
             )
             continue
 
-        # 2. Asosiy qism
+        # 2. Asosiy qism — YANGI SAHIFADAN BOSHLANSIN
         if re.match(r"^2\.\s*Asosiy qism\s*$", stripped, flags=re.IGNORECASE):
+            html_blocks.append(
+                '<br style="page-break-before:always; mso-special-character:line-break;" />'
+            )
             html_blocks.append(
                 '<p class="section-title-main">2. Asosiy qism</p>'
             )
             continue
 
-        # 3. Xulosa
+        # 3. Xulosa — YANGI SAHIFADAN BOSHLANSIN
         if re.match(r"^3\.\s*Xulosa\s*$", stripped, flags=re.IGNORECASE):
+            html_blocks.append(
+                '<br style="page-break-before:always; mso-special-character:line-break;" />'
+            )
             html_blocks.append(
                 '<p class="section-title-main">3. Xulosa</p>'
             )
             continue
 
-        # 4. Foydalanilgan adabiyotlar — alohida sahifadan boshlansin
+        # 4. Foydalanilgan adabiyotlar — YANGI SAHIFADAN BOSHLANSIN
         if re.match(r"^4\.\s*Foydalanilgan adabiyotlar", stripped, flags=re.IGNORECASE):
-            # Yangi sahifadan boshlash
             html_blocks.append(
                 '<br style="page-break-before:always; mso-special-character:line-break;" />'
             )
@@ -1749,20 +1755,19 @@ def ai_content_to_html_paragraphs(content: str) -> str:
             continue
 
         # === Ichki bo'limlar: 2.1. ..., 2.2. ... va hokazo ===
-        # Masalan: 2.1. Sun'iy intellekt tushunchasi
         if re.match(r"^\d+\.\d+\.\s+.+$", stripped):
             html_blocks.append(
                 f'<p class="section-title-sub">{stripped}</p>'
             )
             continue
 
-        # Agar satr allaqachon HTML tag bilan boshlansa (<div>, <table> va h.k.)
+        # Agar satr allaqachon HTML tag bilan boshlansa
         if stripped.lstrip().startswith("<"):
             html_blocks.append(stripped)
         else:
             html_blocks.append(f"<p>{stripped}</p>")
 
-    # Oxirgi jadval bo'lsa, uni ham flush qilamiz
+    # Oxirgi jadval bo'lsa
     if table_buffer:
         flush_table()
 
