@@ -1591,6 +1591,21 @@ def clean_ai_content(raw: str) -> str:
     # text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
 
     return text.strip()
+def remove_image_markers(content: str) -> str:
+    """
+    [RASM n: caption] markerlarini o'chiradi.
+    LaTeX formulalarga tegmaydi!
+    """
+    if not content:
+        return ""
+    
+    # [RASM 1: Sun'iy intellekt...], [RASM 2: ...] kabi markerlarni o'chirish
+    content = re.sub(r'\[RASM\s*\d+\s*:\s*[^\]]*\]', '', content, flags=re.IGNORECASE)
+    
+    # Ortiqcha bo'sh qatorlarni tozalash
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
 
 def generate_reja_from_content(content: str):
     """
@@ -1847,34 +1862,45 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
     """
     WebApp orqali kelgan matndan TITUL + asosiy matnli .doc (Word) fayl yaratadi.
     1-bet: umumiy titul
-    2-betdan: AI rasmlari qo‘shilgan matn
+    2-bet: Mavzu + Reja
+    3-betdan: asosiy matn
     """
     year = datetime.now().year
     safe_topic = re.sub(r"[^0-9A-Za-zА-Яа-яЎҚҒҲўқғҳ]+", "_", topic)[:40] or "referat"
 
     # 1) Firebase / Groq'dan kelgan matnni biroz tozalab olamiz
     cleaned = clean_ai_content(content)
-    # 2) [RASM n: ...] markerlarini AI rasmlari bilan almashtiramiz (faqat backendda)
-    with_images = inject_ai_images_into_content(cleaned)
+    
+    # 2) Faqat [RASM n: ...] markerlarini o'chirish
+    cleaned = remove_image_markers(cleaned)
 
-    # 3) Titul sahifani HTML ko‘rinishida olamiz
+    # 3) Titul sahifani HTML ko'rinishida olamiz
     title_html = build_title_page_html(topic=topic, work_type_name=work_type_name, year=year)
-        # 🔥  REJANI avtomatik yaratamiz
-    reja_items = generate_reja_from_content(with_images)
+    
+    # 4) REJANI avtomatik yaratamiz
+    reja_items = generate_reja_from_content(cleaned)
 
-    reja_html = """
-    <h2 style='text-align:center; font-size:16pt; font-weight:bold;'>REJA</h2>
+    # ✅ YANGILANGAN: Mavzu + bo'sh joy + Reja
+    reja_html = f"""
+    <p style='text-align:center; font-size:14pt; font-weight:bold; margin-bottom:0;'>
+      Mavzu: {topic}
+    </p>
+    
+    <p style='margin:0;'>&nbsp;</p>
+    
+    <h2 style='text-align:center; font-size:16pt; font-weight:bold; margin-top:0;'>REJA</h2>
     """
+    
     for item in reja_items:
         reja_html += f"<p style='text-indent:0;'>{item}</p>"
 
     # Reja tugagandan keyin yangi sahifa
     reja_html += "<br style='page-break-before:always;'>"
 
-    # 4) Asosiy matnni HTML paragraflarga/jadvallarga aylantiramiz
-    body_html = ai_content_to_html_paragraphs(with_images)
+    # 5) Asosiy matnni HTML paragraflarga aylantiramiz
+    body_html = ai_content_to_html_paragraphs(cleaned)
 
-    # 5) Umumiy Word HTML hujjat
+    # 6) Umumiy Word HTML hujjat
     html = f"""
     <html xmlns:o='urn:schemas-microsoft-com:office:office'
           xmlns:w='urn:schemas-microsoft-com:office:word'
@@ -1896,17 +1922,14 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
           margin-top:0;
           margin-bottom:0;
           line-height:150%;
-          mso-line-height-rule:exactly;  /* Word shuni ko‘radi */
+          mso-line-height-rule:exactly;
         }}
-
-        /* Titul sahifa uchun alohida qoidalar */
         .title-page p {{
           text-indent:0;
           text-align:center;
-          line-height:100%;  /* Titulda 1.0, asosiy matnda 1.5 qoladi */
+          line-height:100%;
           mso-line-height-rule:exactly;
         }}
-
         table {{
           border-collapse:collapse;
         }}
@@ -1916,15 +1939,6 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
         }}
         td {{
           vertical-align:top;
-        }}
-        .image-container {{
-          text-align:center;
-          margin:0.7cm 0;
-        }}
-        .image-container p {{
-          text-indent:0;
-          margin:0;
-          text-align:center;
         }}
         .section-title-main {{
           text-indent:0;
@@ -1941,8 +1955,6 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
           margin-bottom:0.2cm;
         }}
       </style>
-
-
     </head>
     <body>
       {title_html}
@@ -1957,7 +1969,6 @@ def build_word_doc_file(topic: str, work_type_name: str, content: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     return path
-
 
 # CORS uchun ruxsat etilgan origin (frontend domeni bilan bir xil)
 ALLOWED_ORIGIN = FRONTEND_URL
